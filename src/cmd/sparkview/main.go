@@ -23,7 +23,6 @@ func main() {
 }
 
 func run() error {
-	// Resolve project root: executable lives in output/bin/ under project root
 	exe, err := os.Executable()
 	if err != nil {
 		return fmt.Errorf("finding executable: %w", err)
@@ -45,29 +44,34 @@ func run() error {
 
 	setDockIcon()
 
-	// Run the event loop in a goroutine — app.Main() must own the main goroutine on macOS
 	go func() {
 		win := new(app.Window)
 		win.Option(app.Title("Spark View"))
 		windowState.Apply(win)
 
-		// Enable macOS native frame autosave for position persistence
-		go func() {
-			time.Sleep(500 * time.Millisecond)
-			ui.EnableFrameAutosave("SparkView")
-		}()
+		// Restore position after the first frame renders.
+		// Must be delayed: Gio/macOS places the window during the first
+		// FrameEvent, so our position must come after that.
+		posRestored := false
 
 		dashboard := ui.NewApp(win, client)
 
-		// Initial fetch
 		go dashboard.Refresh()
 
-		// Periodic refresh every 60 seconds
 		go func() {
 			ticker := time.NewTicker(60 * time.Second)
 			defer ticker.Stop()
 			for range ticker.C {
 				dashboard.Refresh()
+			}
+		}()
+
+		// Poll for position changes every 2 seconds (Gio has no move event)
+		go func() {
+			ticker := time.NewTicker(2 * time.Second)
+			defer ticker.Stop()
+			for range ticker.C {
+				windowState.UpdateGeometry(0, 0)
 			}
 		}()
 
@@ -81,16 +85,22 @@ func run() error {
 				os.Exit(0)
 			case app.ConfigEvent:
 				c := e.Config
-				windowState.UpdateSize(c.Size.X, c.Size.Y)
+				windowState.UpdateGeometry(c.Size.X, c.Size.Y)
 			case app.FrameEvent:
 				gtx := app.NewContext(&ops, e)
 				dashboard.Layout(gtx)
 				e.Frame(gtx.Ops)
+				if !posRestored {
+					posRestored = true
+					go func() {
+						time.Sleep(100 * time.Millisecond)
+						windowState.RestorePosition()
+					}()
+				}
 			}
 		}
 	}()
 
-	// app.Main() runs the platform event loop on the main goroutine (required on macOS)
 	app.Main()
 
 	runtime.KeepAlive(client)

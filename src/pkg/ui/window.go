@@ -12,14 +12,16 @@ import (
 	"gioui.org/unit"
 )
 
-// WindowState holds persisted window geometry.
+// WindowState holds persisted window geometry including position.
 type WindowState struct {
-	Width  int `json:"width"`
-	Height int `json:"height"`
+	Width  int     `json:"width"`
+	Height int     `json:"height"`
+	X      float64 `json:"x"`
+	Y      float64 `json:"y"`
+	HasPos bool    `json:"has_pos"`
 }
 
-// WindowPersist saves and restores window size.
-// Position is handled by macOS NSWindow frame autosave (window_darwin.go).
+// WindowPersist saves and restores window size and position.
 type WindowPersist struct {
 	mu       sync.Mutex
 	state    WindowState
@@ -34,7 +36,7 @@ func NewWindowPersist(path string) (*WindowPersist, error) {
 		path: path,
 		state: WindowState{
 			Width:  680,
-			Height: 580,
+			Height: 500,
 		},
 	}
 
@@ -62,19 +64,45 @@ func (wp *WindowPersist) Apply(win *app.Window) {
 	win.Option(app.Size(unit.Dp(s.Width), unit.Dp(s.Height)))
 }
 
-// UpdateSize records a new window size, saving after a debounce.
-func (wp *WindowPersist) UpdateSize(width, height int) {
+// RestorePosition restores the window position after the window is created.
+// Must be called from a goroutine (not the frame handler) with a short delay
+// to ensure the window exists.
+func (wp *WindowPersist) RestorePosition() {
+	wp.mu.Lock()
+	s := wp.state
+	wp.mu.Unlock()
+
+	if s.HasPos {
+		SetWindowPosition(s.X, s.Y)
+	}
+}
+
+// UpdateGeometry reads the current window frame from the OS and saves it.
+// Call this on ConfigEvent (resize) or periodically.
+func (wp *WindowPersist) UpdateGeometry(gioWidth, gioHeight int) {
+	x, y, _, _, ok := GetWindowFrame()
+
 	wp.mu.Lock()
 	defer wp.mu.Unlock()
 
-	if wp.state.Width == width && wp.state.Height == height {
+	changed := false
+	if gioWidth > 0 && gioHeight > 0 && (wp.state.Width != gioWidth || wp.state.Height != gioHeight) {
+		wp.state.Width = gioWidth
+		wp.state.Height = gioHeight
+		changed = true
+	}
+	if ok && (wp.state.X != x || wp.state.Y != y || !wp.state.HasPos) {
+		wp.state.X = x
+		wp.state.Y = y
+		wp.state.HasPos = true
+		changed = true
+	}
+
+	if !changed {
 		return
 	}
 
-	wp.state.Width = width
-	wp.state.Height = height
 	wp.dirty = true
-
 	if wp.debounce != nil {
 		wp.debounce.Stop()
 	}
