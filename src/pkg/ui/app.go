@@ -14,6 +14,7 @@ import (
 	"gioui.org/app"
 	"gioui.org/font"
 	"gioui.org/layout"
+	"gioui.org/op"
 	"gioui.org/op/clip"
 	"gioui.org/op/paint"
 	"gioui.org/text"
@@ -24,36 +25,40 @@ import (
 
 // Design tokens — dark theme with vibrant accents.
 var (
-	bgColor      = color.NRGBA{R: 0x0a, G: 0x0a, B: 0x0e, A: 0xff}
-	surfaceColor = color.NRGBA{R: 0x14, G: 0x14, B: 0x1c, A: 0xff}
-	cardColor    = color.NRGBA{R: 0x18, G: 0x18, B: 0x24, A: 0xff}
-	borderColor  = color.NRGBA{R: 0x2a, G: 0x2a, B: 0x3a, A: 0xff}
-	separatorClr = color.NRGBA{R: 0x22, G: 0x22, B: 0x30, A: 0xff}
+	bgColor      = color.NRGBA{R: 0x0f, G: 0x0f, B: 0x0f, A: 0xff}
+	headerBGClr  = color.NRGBA{R: 0x18, G: 0x18, B: 0x18, A: 0xff}
+	rowAltColor  = color.NRGBA{R: 0x14, G: 0x14, B: 0x14, A: 0xff}
+	separatorClr = color.NRGBA{R: 0x2a, G: 0x2a, B: 0x2a, A: 0xff}
+	statusBarBG  = color.NRGBA{R: 0x12, G: 0x12, B: 0x18, A: 0xff}
 
-	textPrimary   = color.NRGBA{R: 0xe8, G: 0xe8, B: 0xf0, A: 0xff}
-	textSecondary = color.NRGBA{R: 0x9a, G: 0x9a, B: 0xb0, A: 0xff}
-	textMuted     = color.NRGBA{R: 0x60, G: 0x60, B: 0x78, A: 0xff}
-	textBright    = color.NRGBA{R: 0xff, G: 0xff, B: 0xff, A: 0xff}
+	textPrimary   = color.NRGBA{R: 0xe8, G: 0xe8, B: 0xe8, A: 0xff}
+	textSecondary = color.NRGBA{R: 0xa8, G: 0xa8, B: 0xa8, A: 0xff}
+	textMuted     = color.NRGBA{R: 0x60, G: 0x60, B: 0x70, A: 0xff}
+
+	// Row highlight colors (subtle background tints)
+	rowLoadedBG = color.NRGBA{R: 0x00, G: 0x2a, B: 0x1a, A: 0xff} // dark green tint
+	rowActiveBG = color.NRGBA{R: 0x2a, G: 0x1a, B: 0x00, A: 0xff} // dark amber tint
 
 	// Accent palette
-	accentCyan    = color.NRGBA{R: 0x00, G: 0xd4, B: 0xff, A: 0xff}
-	accentGreen   = color.NRGBA{R: 0x00, G: 0xe6, B: 0x96, A: 0xff}
-	accentOrange  = color.NRGBA{R: 0xff, G: 0x9f, B: 0x43, A: 0xff}
-	accentRed     = color.NRGBA{R: 0xff, G: 0x4d, B: 0x6a, A: 0xff}
-	accentPurple  = color.NRGBA{R: 0xb4, G: 0x7a, B: 0xff, A: 0xff}
-	accentDimCyan = color.NRGBA{R: 0x00, G: 0x6a, B: 0x80, A: 0xff}
+	accentCyan   = color.NRGBA{R: 0x00, G: 0xd4, B: 0xff, A: 0xff}
+	accentGreen  = color.NRGBA{R: 0x5c, G: 0xb8, B: 0x5c, A: 0xff}
+	accentOrange = color.NRGBA{R: 0xff, G: 0xb8, B: 0x4d, A: 0xff}
+	accentRed    = color.NRGBA{R: 0xff, G: 0x5c, B: 0x5c, A: 0xff}
+	accentPurple = color.NRGBA{R: 0xb4, G: 0x7a, B: 0xff, A: 0xff}
 
 	// Gauge colors
 	gaugeTrack = color.NRGBA{R: 0x1a, G: 0x1a, B: 0x28, A: 0xff}
-	gaugeLow   = color.NRGBA{R: 0x00, G: 0xe6, B: 0x96, A: 0xff} // green
-	gaugeMid   = color.NRGBA{R: 0x00, G: 0xd4, B: 0xff, A: 0xff} // cyan
-	gaugeHigh  = color.NRGBA{R: 0xff, G: 0x9f, B: 0x43, A: 0xff} // orange
-	gaugeFull  = color.NRGBA{R: 0xff, G: 0x4d, B: 0x6a, A: 0xff} // red
+	gaugeLow   = color.NRGBA{R: 0x00, G: 0xe6, B: 0x96, A: 0xff}
+	gaugeMid   = color.NRGBA{R: 0x00, G: 0xd4, B: 0xff, A: 0xff}
+	gaugeHigh  = color.NRGBA{R: 0xff, G: 0x9f, B: 0x43, A: 0xff}
+	gaugeFull  = color.NRGBA{R: 0xff, G: 0x4d, B: 0x6a, A: 0xff}
 
-	// Status dots
 	dotLoaded   = color.NRGBA{R: 0x00, G: 0xe6, B: 0x96, A: 0xff}
 	dotUnloaded = color.NRGBA{R: 0x44, G: 0x44, B: 0x55, A: 0xff}
 )
+
+// Column widths: Model (flexed), State, VRAM, Active, Queued, Idle
+var colWidths = [5]unit.Dp{0, 90, 80, 80, 80} // model name is flexed
 
 // App holds the Spark View application state.
 type App struct {
@@ -103,7 +108,6 @@ func (a *App) Refresh() {
 
 // Layout renders the full UI frame.
 func (a *App) Layout(gtx layout.Context) layout.Dimensions {
-	// Fill background
 	paint.FillShape(gtx.Ops, bgColor, clip.Rect{Max: gtx.Constraints.Max}.Op())
 
 	a.mu.Lock()
@@ -114,95 +118,83 @@ func (a *App) Layout(gtx layout.Context) layout.Dimensions {
 	a.mu.Unlock()
 
 	return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
-		// Title bar
+		// Table header
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			return a.layoutTitleBar(gtx, connected, lastErr, lastRefresh)
+			return a.layoutHeader(gtx)
 		}),
-		// Separator
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 			return layoutSeparator(gtx, separatorClr)
 		}),
-		// Scrollable content
+		// Table body
 		layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
 			if !connected && lastRefresh.IsZero() {
 				return a.layoutConnecting(gtx)
 			}
-			return a.layoutContent(gtx, status)
+			return a.layoutTable(gtx, status)
+		}),
+		// Bottom separator
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			return layoutSeparator(gtx, separatorClr)
+		}),
+		// Status bar
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			return a.layoutStatusBar(gtx, status, connected, lastErr, lastRefresh)
 		}),
 	)
 }
 
-func (a *App) layoutTitleBar(gtx layout.Context, connected bool, lastErr error, lastRefresh time.Time) layout.Dimensions {
-	return layout.Inset{
-		Top: unit.Dp(16), Bottom: unit.Dp(12),
-		Left: unit.Dp(24), Right: unit.Dp(24),
-	}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-		return layout.Flex{Alignment: layout.Middle, Spacing: layout.SpaceBetween}.Layout(gtx,
-			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				return layout.Flex{Alignment: layout.Baseline}.Layout(gtx,
-					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-						// Lightning bolt prefix
-						l := material.Body1(a.theme, "SPARK")
-						l.Color = accentCyan
-						l.Font.Weight = font.Bold
-						l.TextSize = unit.Sp(18)
-						return l.Layout(gtx)
-					}),
-					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-						return layout.Inset{Left: unit.Dp(8)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-							l := material.Body1(a.theme, "VIEW")
-							l.Color = textMuted
-							l.Font.Weight = font.Light
-							l.TextSize = unit.Sp(18)
-							return l.Layout(gtx)
-						})
-					}),
-				)
-			}),
-			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				var statusText string
-				var statusColor color.NRGBA
-				if connected {
-					if lastRefresh.IsZero() {
-						statusText = "connecting..."
-						statusColor = textMuted
-					} else {
-						ago := time.Since(lastRefresh).Truncate(time.Second)
-						statusText = fmt.Sprintf("updated %s ago", ago)
-						statusColor = textMuted
-					}
-				} else if lastErr != nil {
-					statusText = "offline"
-					statusColor = accentRed
-				} else {
-					statusText = "connecting..."
-					statusColor = textMuted
-				}
+func (a *App) layoutHeader(gtx layout.Context) layout.Dimensions {
+	headerH := gtx.Dp(unit.Dp(32))
+	totalW := gtx.Constraints.Max.X
 
-				return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
-					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-						// Status dot
-						dotSize := gtx.Dp(unit.Dp(6))
-						dotColor := dotUnloaded
-						if connected {
-							dotColor = dotLoaded
-						}
-						r := clip.Ellipse{Max: image.Pt(dotSize, dotSize)}.Op(gtx.Ops)
-						paint.FillShape(gtx.Ops, dotColor, r)
-						return layout.Dimensions{Size: image.Pt(dotSize, dotSize)}
-					}),
-					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-						return layout.Inset{Left: unit.Dp(8)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-							l := material.Body2(a.theme, statusText)
-							l.Color = statusColor
-							l.TextSize = unit.Sp(11)
-							return l.Layout(gtx)
-						})
-					}),
-				)
-			}),
-		)
-	})
+	paint.FillShape(gtx.Ops, headerBGClr, clip.Rect{Max: image.Pt(totalW, headerH)}.Op())
+
+	type headerCol struct {
+		label string
+		align text.Alignment
+	}
+	cols := []headerCol{
+		{"Model", text.Start},
+		{"State", text.Start},
+		{"VRAM", text.End},
+		{"Active", text.End},
+		{"Queued", text.End},
+	}
+
+	nameW := totalW
+	for i := 1; i < len(colWidths); i++ {
+		nameW -= gtx.Dp(colWidths[i])
+	}
+
+	x := 0
+	for i, col := range cols {
+		var colW int
+		if i == 0 {
+			colW = nameW
+		} else {
+			colW = gtx.Dp(colWidths[i])
+		}
+
+		offset := op.Offset(image.Pt(x, 0)).Push(gtx.Ops)
+		gtxCol := gtx
+		gtxCol.Constraints = layout.Exact(image.Pt(colW, headerH))
+
+		layout.Inset{
+			Left: unit.Dp(16), Right: unit.Dp(16),
+			Top: unit.Dp(8),
+		}.Layout(gtxCol, func(gtx layout.Context) layout.Dimensions {
+			l := material.Body2(a.theme, col.label)
+			l.Font.Weight = font.Medium
+			l.TextSize = unit.Sp(11)
+			l.Color = textMuted
+			l.Alignment = col.align
+			return l.Layout(gtx)
+		})
+		offset.Pop()
+		x += colW
+	}
+
+	return layout.Dimensions{Size: image.Pt(totalW, headerH)}
 }
 
 func (a *App) layoutConnecting(gtx layout.Context) layout.Dimensions {
@@ -214,93 +206,250 @@ func (a *App) layoutConnecting(gtx layout.Context) layout.Dimensions {
 	})
 }
 
-func (a *App) layoutContent(gtx layout.Context, status arbiter.Status) layout.Dimensions {
-	return layout.Inset{
-		Left: unit.Dp(24), Right: unit.Dp(24),
-		Top: unit.Dp(16), Bottom: unit.Dp(16),
-	}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-		return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
-			// VRAM gauge section
-			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				return a.layoutVRAMSection(gtx, status)
-			}),
-			// Spacer
-			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				return layout.Dimensions{Size: image.Pt(0, gtx.Dp(unit.Dp(20)))}
-			}),
-			// Models section
-			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				return a.layoutModelsSection(gtx, status)
-			}),
-			// Spacer
-			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				return layout.Dimensions{Size: image.Pt(0, gtx.Dp(unit.Dp(20)))}
-			}),
-			// Queue section
-			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				return a.layoutQueueSection(gtx, status)
-			}),
-		)
+func (a *App) layoutTable(gtx layout.Context, status arbiter.Status) layout.Dimensions {
+	return material.List(a.theme, &a.list).Layout(gtx, len(status.Models), func(gtx layout.Context, index int) layout.Dimensions {
+		return a.layoutRow(gtx, status.Models[index], index)
 	})
 }
 
-func (a *App) layoutVRAMSection(gtx layout.Context, status arbiter.Status) layout.Dimensions {
-	return layoutCard(gtx, func(gtx layout.Context) layout.Dimensions {
-		return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
-			// Header row: "VRAM" ... "37.0 / 100 GB"
+func (a *App) layoutRow(gtx layout.Context, m arbiter.Model, index int) layout.Dimensions {
+	rowH := gtx.Dp(unit.Dp(36))
+	totalW := gtx.Constraints.Max.X
+
+	// Row background: active jobs > loaded > alternating
+	switch {
+	case m.ActiveJobs > 0:
+		paint.FillShape(gtx.Ops, rowActiveBG, clip.Rect{Max: image.Pt(totalW, rowH)}.Op())
+	case m.State == "loaded":
+		paint.FillShape(gtx.Ops, rowLoadedBG, clip.Rect{Max: image.Pt(totalW, rowH)}.Op())
+	default:
+		if index%2 == 0 {
+			paint.FillShape(gtx.Ops, rowAltColor, clip.Rect{Max: image.Pt(totalW, rowH)}.Op())
+		}
+	}
+
+	nameW := totalW
+	for i := 1; i < len(colWidths); i++ {
+		nameW -= gtx.Dp(colWidths[i])
+	}
+
+	// Determine row colors based on state
+	nameColor := textSecondary
+	if m.State == "loaded" {
+		nameColor = textPrimary
+	}
+
+	stateColor := textMuted
+	stateText := m.State
+	if m.State == "loaded" {
+		stateColor = accentGreen
+	}
+
+	activeColor := textMuted
+	activeText := fmt.Sprintf("%d", m.ActiveJobs)
+	if m.ActiveJobs > 0 {
+		activeColor = accentOrange
+	}
+
+	queuedColor := textMuted
+	queuedText := fmt.Sprintf("%d", m.QueuedJobs)
+	if m.QueuedJobs > 0 {
+		queuedColor = accentPurple
+	}
+
+	vramText := fmt.Sprintf("%.0f GB", m.MemoryGB)
+	vramColor := textSecondary
+	if m.State != "loaded" {
+		vramColor = textMuted
+	}
+
+	type colData struct {
+		val   string
+		width int
+		align text.Alignment
+		color color.NRGBA
+		bold  bool
+	}
+
+	columns := []colData{
+		{m.ID, nameW, text.Start, nameColor, true},
+		{stateText, gtx.Dp(colWidths[1]), text.Start, stateColor, false},
+		{vramText, gtx.Dp(colWidths[2]), text.End, vramColor, false},
+		{activeText, gtx.Dp(colWidths[3]), text.End, activeColor, false},
+		{queuedText, gtx.Dp(colWidths[4]), text.End, queuedColor, false},
+	}
+
+	x := 0
+	for _, col := range columns {
+		offset := op.Offset(image.Pt(x, 0)).Push(gtx.Ops)
+		gtxCol := gtx
+		gtxCol.Constraints = layout.Exact(image.Pt(col.width, rowH))
+
+		layout.Inset{
+			Left: unit.Dp(16), Right: unit.Dp(16),
+			Top: unit.Dp(10),
+		}.Layout(gtxCol, func(gtx layout.Context) layout.Dimensions {
+			l := material.Body2(a.theme, col.val)
+			l.Color = col.color
+			l.TextSize = unit.Sp(12)
+			l.Alignment = col.align
+			if col.bold {
+				l.Font.Weight = font.Medium
+			}
+			l.MaxLines = 1
+			return l.Layout(gtx)
+		})
+
+		offset.Pop()
+		x += col.width
+	}
+
+	// Row separator
+	sepOff := op.Offset(image.Pt(gtx.Dp(unit.Dp(16)), rowH-1)).Push(gtx.Ops)
+	sepW := totalW - gtx.Dp(unit.Dp(32))
+	paint.FillShape(gtx.Ops, color.NRGBA{R: 0x22, G: 0x22, B: 0x22, A: 0xff},
+		clip.Rect{Max: image.Pt(sepW, 1)}.Op())
+	sepOff.Pop()
+
+	return layout.Dimensions{Size: image.Pt(totalW, rowH)}
+}
+
+func (a *App) layoutStatusBar(gtx layout.Context, status arbiter.Status, connected bool, lastErr error, lastRefresh time.Time) layout.Dimensions {
+	barH := gtx.Dp(unit.Dp(36))
+	totalW := gtx.Constraints.Max.X
+
+	paint.FillShape(gtx.Ops, statusBarBG, clip.Rect{Max: image.Pt(totalW, barH)}.Op())
+
+	return layout.Inset{
+		Left: unit.Dp(16), Right: unit.Dp(16),
+		Top: unit.Dp(8), Bottom: unit.Dp(8),
+	}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		return layout.Flex{Alignment: layout.Middle, Spacing: layout.SpaceBetween}.Layout(gtx,
+			// Left side: VRAM gauge
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				return layout.Flex{Alignment: layout.Baseline, Spacing: layout.SpaceBetween}.Layout(gtx,
+				return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
+					// Connection dot
 					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-						l := material.Body2(a.theme, "VRAM")
-						l.Color = textSecondary
-						l.Font.Weight = font.Medium
-						l.TextSize = unit.Sp(11)
-						return l.Layout(gtx)
+						dotSize := gtx.Dp(unit.Dp(6))
+						dotColor := dotUnloaded
+						if connected {
+							dotColor = dotLoaded
+						}
+						r := clip.Ellipse{Max: image.Pt(dotSize, dotSize)}.Op(gtx.Ops)
+						paint.FillShape(gtx.Ops, dotColor, r)
+						return layout.Dimensions{Size: image.Pt(dotSize, dotSize)}
 					}),
+					// VRAM label
 					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-						return layout.Flex{Alignment: layout.Baseline}.Layout(gtx,
-							layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-								l := material.Body1(a.theme, fmt.Sprintf("%.1f", status.VRAMUsedGB))
-								l.Color = textBright
-								l.Font.Weight = font.Bold
-								l.TextSize = unit.Sp(22)
-								return l.Layout(gtx)
-							}),
-							layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-								return layout.Inset{Left: unit.Dp(4)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-									l := material.Body2(a.theme, fmt.Sprintf("/ %.0f GB", status.VRAMBudgetGB))
-									l.Color = textMuted
-									l.TextSize = unit.Sp(13)
-									return l.Layout(gtx)
-								})
-							}),
-						)
+						return layout.Inset{Left: unit.Dp(10)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+							l := material.Body2(a.theme, "VRAM")
+							l.Color = textMuted
+							l.TextSize = unit.Sp(10)
+							return l.Layout(gtx)
+						})
+					}),
+					// VRAM gauge
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+						return layout.Inset{Left: unit.Dp(8)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+							gtx.Constraints.Min.X = gtx.Dp(unit.Dp(100))
+							gtx.Constraints.Max.X = gtx.Dp(unit.Dp(100))
+							return a.layoutGaugeBar(gtx, status.VRAMUsedGB, status.VRAMBudgetGB)
+						})
+					}),
+					// VRAM numbers
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+						return layout.Inset{Left: unit.Dp(8)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+							l := material.Body2(a.theme, fmt.Sprintf("%.0f / %.0f GB", status.VRAMUsedGB, status.VRAMBudgetGB))
+							l.Color = textSecondary
+							l.TextSize = unit.Sp(10)
+							return l.Layout(gtx)
+						})
 					}),
 				)
 			}),
-			// Gauge bar
+			// Right side: queue stats
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				return layout.Inset{Top: unit.Dp(10)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-					return a.layoutGaugeBar(gtx, status.VRAMUsedGB, status.VRAMBudgetGB)
-				})
+				return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+						return a.layoutStatusStat(gtx, "run", status.Queue.Running, accentGreen)
+					}),
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+						return layout.Inset{Left: unit.Dp(16)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+							return a.layoutStatusStat(gtx, "queue", status.Queue.Queued, accentPurple)
+						})
+					}),
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+						return layout.Inset{Left: unit.Dp(16)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+							return a.layoutStatusStat(gtx, "done", status.Queue.Completed, accentCyan)
+						})
+					}),
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+						return layout.Inset{Left: unit.Dp(16)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+							return a.layoutStatusStat(gtx, "fail", status.Queue.Failed, accentRed)
+						})
+					}),
+					// Update time
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+						if lastRefresh.IsZero() {
+							return layout.Dimensions{}
+						}
+						return layout.Inset{Left: unit.Dp(20)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+							var statusText string
+							if connected {
+								ago := time.Since(lastRefresh).Truncate(time.Second)
+								statusText = fmt.Sprintf("%s ago", ago)
+							} else if lastErr != nil {
+								statusText = "offline"
+							} else {
+								statusText = "..."
+							}
+							l := material.Body2(a.theme, statusText)
+							l.Color = textMuted
+							l.TextSize = unit.Sp(10)
+							return l.Layout(gtx)
+						})
+					}),
+				)
 			}),
 		)
 	})
 }
 
+func (a *App) layoutStatusStat(gtx layout.Context, label string, count int, clr color.NRGBA) layout.Dimensions {
+	return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			numColor := textMuted
+			if count > 0 {
+				numColor = clr
+			}
+			l := material.Body2(a.theme, fmt.Sprintf("%d", count))
+			l.Color = numColor
+			l.Font.Weight = font.Bold
+			l.TextSize = unit.Sp(11)
+			return l.Layout(gtx)
+		}),
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			return layout.Inset{Left: unit.Dp(4)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+				l := material.Body2(a.theme, label)
+				l.Color = textMuted
+				l.TextSize = unit.Sp(10)
+				return l.Layout(gtx)
+			})
+		}),
+	)
+}
+
 func (a *App) layoutGaugeBar(gtx layout.Context, used, budget float64) layout.Dimensions {
-	barH := gtx.Dp(unit.Dp(8))
+	barH := gtx.Dp(unit.Dp(6))
 	barW := gtx.Constraints.Max.X
 	radius := barH / 2
 
-	// Track background
 	trackRect := clip.RRect{
 		Rect: image.Rect(0, 0, barW, barH),
 		NE:   radius, NW: radius, SE: radius, SW: radius,
 	}
 	paint.FillShape(gtx.Ops, gaugeTrack, trackRect.Op(gtx.Ops))
 
-	// Fill
 	pct := 0.0
 	if budget > 0 {
 		pct = used / budget
@@ -316,301 +465,9 @@ func (a *App) layoutGaugeBar(gtx layout.Context, used, budget float64) layout.Di
 			NE:   radius, NW: radius, SE: radius, SW: radius,
 		}
 		paint.FillShape(gtx.Ops, fillColor, fillRect.Op(gtx.Ops))
-
-		// Glow effect — semi-transparent overlay
-		glowColor := fillColor
-		glowColor.A = 0x30
-		glowRect := clip.RRect{
-			Rect: image.Rect(0, -2, fillW, barH+2),
-			NE:   radius + 1, NW: radius + 1, SE: radius + 1, SW: radius + 1,
-		}
-		paint.FillShape(gtx.Ops, glowColor, glowRect.Op(gtx.Ops))
 	}
 
 	return layout.Dimensions{Size: image.Pt(barW, barH)}
-}
-
-func (a *App) layoutModelsSection(gtx layout.Context, status arbiter.Status) layout.Dimensions {
-	if len(status.Models) == 0 {
-		return layout.Dimensions{}
-	}
-
-	// Section label
-	children := []layout.FlexChild{
-		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			l := material.Body2(a.theme, "MODELS")
-			l.Color = textMuted
-			l.Font.Weight = font.Medium
-			l.TextSize = unit.Sp(11)
-			return l.Layout(gtx)
-		}),
-		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			return layout.Dimensions{Size: image.Pt(0, gtx.Dp(unit.Dp(8)))}
-		}),
-	}
-
-	for i := range status.Models {
-		m := status.Models[i]
-		children = append(children,
-			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				return a.layoutModelCard(gtx, m)
-			}),
-			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				return layout.Dimensions{Size: image.Pt(0, gtx.Dp(unit.Dp(6)))}
-			}),
-		)
-	}
-
-	return layout.Flex{Axis: layout.Vertical}.Layout(gtx, children...)
-}
-
-func (a *App) layoutModelCard(gtx layout.Context, m arbiter.Model) layout.Dimensions {
-	return layoutCard(gtx, func(gtx layout.Context) layout.Dimensions {
-		return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
-			// Top row: status dot + name + memory
-			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				return layout.Flex{Alignment: layout.Middle, Spacing: layout.SpaceBetween}.Layout(gtx,
-					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-						return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
-							// Status dot
-							layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-								dotSize := gtx.Dp(unit.Dp(8))
-								dotColor := dotUnloaded
-								if m.State == "loaded" {
-									dotColor = dotLoaded
-								}
-								r := clip.Ellipse{Max: image.Pt(dotSize, dotSize)}.Op(gtx.Ops)
-								paint.FillShape(gtx.Ops, dotColor, r)
-
-								// Glow for loaded models
-								if m.State == "loaded" {
-									glowColor := dotColor
-									glowColor.A = 0x40
-									glowR := clip.Ellipse{
-										Min: image.Pt(-2, -2),
-										Max: image.Pt(dotSize+2, dotSize+2),
-									}.Op(gtx.Ops)
-									paint.FillShape(gtx.Ops, glowColor, glowR)
-								}
-
-								return layout.Dimensions{Size: image.Pt(dotSize, dotSize)}
-							}),
-							// Name
-							layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-								return layout.Inset{Left: unit.Dp(10)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-									nameColor := textPrimary
-									if m.State != "loaded" {
-										nameColor = textSecondary
-									}
-									l := material.Body1(a.theme, m.ID)
-									l.Color = nameColor
-									l.Font.Weight = font.Medium
-									l.TextSize = unit.Sp(14)
-									return l.Layout(gtx)
-								})
-							}),
-						)
-					}),
-					// Memory badge
-					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-						label := fmt.Sprintf("%.0f GB", m.MemoryGB)
-						return layoutBadge(gtx, a.theme, label, accentDimCyan, accentCyan)
-					}),
-				)
-			}),
-			// Bottom row: state label + job counts
-			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				return layout.Inset{Top: unit.Dp(8), Left: unit.Dp(18)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-					return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
-						// State label
-						layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-							stateColor := textMuted
-							if m.State == "loaded" {
-								stateColor = accentGreen
-							}
-							l := material.Body2(a.theme, m.State)
-							l.Color = stateColor
-							l.TextSize = unit.Sp(11)
-							return l.Layout(gtx)
-						}),
-						// Separator
-						layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-							return layout.Inset{Left: unit.Dp(12), Right: unit.Dp(12)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-								l := material.Body2(a.theme, "|")
-								l.Color = borderColor
-								l.TextSize = unit.Sp(11)
-								return l.Layout(gtx)
-							})
-						}),
-						// Active jobs
-						layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-							activeColor := textMuted
-							if m.ActiveJobs > 0 {
-								activeColor = accentOrange
-							}
-							l := material.Body2(a.theme, fmt.Sprintf("%d active", m.ActiveJobs))
-							l.Color = activeColor
-							l.TextSize = unit.Sp(11)
-							return l.Layout(gtx)
-						}),
-						// Separator
-						layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-							return layout.Inset{Left: unit.Dp(12), Right: unit.Dp(12)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-								l := material.Body2(a.theme, "|")
-								l.Color = borderColor
-								l.TextSize = unit.Sp(11)
-								return l.Layout(gtx)
-							})
-						}),
-						// Queued jobs
-						layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-							queuedColor := textMuted
-							if m.QueuedJobs > 0 {
-								queuedColor = accentPurple
-							}
-							l := material.Body2(a.theme, fmt.Sprintf("%d queued", m.QueuedJobs))
-							l.Color = queuedColor
-							l.TextSize = unit.Sp(11)
-							return l.Layout(gtx)
-						}),
-						// Idle time (if applicable)
-						layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-							if m.IdleSeconds == nil {
-								return layout.Dimensions{}
-							}
-							return layout.Inset{Left: unit.Dp(12)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-								return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
-									layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-										return layout.Inset{Right: unit.Dp(12)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-											l := material.Body2(a.theme, "|")
-											l.Color = borderColor
-											l.TextSize = unit.Sp(11)
-											return l.Layout(gtx)
-										})
-									}),
-									layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-										l := material.Body2(a.theme, fmt.Sprintf("idle %s", formatDuration(*m.IdleSeconds)))
-										l.Color = textMuted
-										l.TextSize = unit.Sp(11)
-										return l.Layout(gtx)
-									}),
-								)
-							})
-						}),
-					)
-				})
-			}),
-		)
-	})
-}
-
-func (a *App) layoutQueueSection(gtx layout.Context, status arbiter.Status) layout.Dimensions {
-	return layoutCard(gtx, func(gtx layout.Context) layout.Dimensions {
-		return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
-			// Header
-			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				l := material.Body2(a.theme, "QUEUE")
-				l.Color = textSecondary
-				l.Font.Weight = font.Medium
-				l.TextSize = unit.Sp(11)
-				return l.Layout(gtx)
-			}),
-			// Stats row
-			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				return layout.Inset{Top: unit.Dp(12)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-					return layout.Flex{Spacing: layout.SpaceEvenly}.Layout(gtx,
-						layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
-							return a.layoutQueueStat(gtx, "Running", status.Queue.Running, accentGreen)
-						}),
-						layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
-							return a.layoutQueueStat(gtx, "Queued", status.Queue.Queued, accentPurple)
-						}),
-						layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
-							return a.layoutQueueStat(gtx, "Done", status.Queue.Completed, accentCyan)
-						}),
-						layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
-							return a.layoutQueueStat(gtx, "Failed", status.Queue.Failed, accentRed)
-						}),
-					)
-				})
-			}),
-		)
-	})
-}
-
-func (a *App) layoutQueueStat(gtx layout.Context, label string, count int, clr color.NRGBA) layout.Dimensions {
-	return layout.Flex{Axis: layout.Vertical, Alignment: layout.Middle}.Layout(gtx,
-		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			numColor := textMuted
-			if count > 0 {
-				numColor = clr
-			}
-			l := material.Body1(a.theme, fmt.Sprintf("%d", count))
-			l.Color = numColor
-			l.Font.Weight = font.Bold
-			l.TextSize = unit.Sp(24)
-			l.Alignment = text.Middle
-			return l.Layout(gtx)
-		}),
-		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			return layout.Inset{Top: unit.Dp(2)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-				l := material.Body2(a.theme, label)
-				l.Color = textMuted
-				l.TextSize = unit.Sp(10)
-				l.Alignment = text.Middle
-				return l.Layout(gtx)
-			})
-		}),
-	)
-}
-
-// layoutCard renders a rounded card container.
-func layoutCard(gtx layout.Context, content func(layout.Context) layout.Dimensions) layout.Dimensions {
-	return layout.Stack{}.Layout(gtx,
-		layout.Expanded(func(gtx layout.Context) layout.Dimensions {
-			r := gtx.Dp(unit.Dp(8))
-			bounds := image.Rect(0, 0, gtx.Constraints.Max.X, gtx.Constraints.Min.Y)
-			// Border
-			borderRR := clip.RRect{Rect: bounds, NE: r, NW: r, SE: r, SW: r}
-			paint.FillShape(gtx.Ops, borderColor, borderRR.Op(gtx.Ops))
-			// Inner fill
-			innerBounds := image.Rect(1, 1, bounds.Max.X-1, bounds.Max.Y-1)
-			innerRR := clip.RRect{Rect: innerBounds, NE: r - 1, NW: r - 1, SE: r - 1, SW: r - 1}
-			paint.FillShape(gtx.Ops, cardColor, innerRR.Op(gtx.Ops))
-			return layout.Dimensions{Size: bounds.Max}
-		}),
-		layout.Stacked(func(gtx layout.Context) layout.Dimensions {
-			return layout.Inset{
-				Top: unit.Dp(14), Bottom: unit.Dp(14),
-				Left: unit.Dp(16), Right: unit.Dp(16),
-			}.Layout(gtx, content)
-		}),
-	)
-}
-
-// layoutBadge renders a small pill-shaped badge.
-func layoutBadge(gtx layout.Context, th *material.Theme, label string, bg, fg color.NRGBA) layout.Dimensions {
-	return layout.Stack{}.Layout(gtx,
-		layout.Expanded(func(gtx layout.Context) layout.Dimensions {
-			r := gtx.Dp(unit.Dp(4))
-			bounds := image.Rect(0, 0, gtx.Constraints.Min.X, gtx.Constraints.Min.Y)
-			rr := clip.RRect{Rect: bounds, NE: r, NW: r, SE: r, SW: r}
-			paint.FillShape(gtx.Ops, bg, rr.Op(gtx.Ops))
-			return layout.Dimensions{Size: bounds.Max}
-		}),
-		layout.Stacked(func(gtx layout.Context) layout.Dimensions {
-			return layout.Inset{
-				Top: unit.Dp(3), Bottom: unit.Dp(3),
-				Left: unit.Dp(8), Right: unit.Dp(8),
-			}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-				l := material.Body2(th, label)
-				l.Color = fg
-				l.TextSize = unit.Sp(10)
-				l.Font.Weight = font.Medium
-				return l.Layout(gtx)
-			})
-		}),
-	)
 }
 
 // layoutSeparator draws a horizontal line.
