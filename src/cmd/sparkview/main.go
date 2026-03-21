@@ -59,7 +59,7 @@ func run() error {
 		go dashboard.Refresh()
 
 		go func() {
-			ticker := time.NewTicker(60 * time.Second)
+			ticker := time.NewTicker(1 * time.Second)
 			defer ticker.Stop()
 			for range ticker.C {
 				dashboard.Refresh()
