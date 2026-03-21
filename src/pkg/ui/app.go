@@ -359,7 +359,7 @@ func (a *App) layoutStatusBar(gtx layout.Context, status arbiter.Status, connect
 					// VRAM numbers
 					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 						return layout.Inset{Left: unit.Dp(8)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-							l := material.Body2(a.theme, fmt.Sprintf("%.0f / %.0f GB", status.VRAMUsedGB, status.VRAMBudgetGB))
+							l := material.Body2(a.theme, fmt.Sprintf("%.1f / %.0f GB", status.VRAMUsedGB, status.VRAMBudgetGB))
 							l.Color = textSecondary
 							l.TextSize = unit.Sp(10)
 							return l.Layout(gtx)
