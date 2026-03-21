@@ -257,10 +257,11 @@ func (a *App) layoutRow(gtx layout.Context, m arbiter.Model, index int) layout.D
 		queuedColor = accentPurple
 	}
 
-	vramText := fmt.Sprintf("%.0f GB", m.MemoryGB)
-	vramColor := textSecondary
-	if m.State != "loaded" {
-		vramColor = textMuted
+	vramText := "-"
+	vramColor := textMuted
+	if m.State == "loaded" || m.State == "active" {
+		vramText = fmt.Sprintf("%.0f GB", m.MemoryGB)
+		vramColor = textSecondary
 	}
 
 	type colData struct {
