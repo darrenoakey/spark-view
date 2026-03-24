@@ -183,4 +183,37 @@ func TestSetMaxInstancesError(t *testing.T) {
 	}
 }
 
+// TestClearQueue verifies the client sends a correct DELETE request.
+func TestClearQueue(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+
+	var gotModelID string
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("DELETE /v1/models/{id}/queue", func(w http.ResponseWriter, r *http.Request) {
+		gotModelID = r.PathValue("id")
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"model_id":  gotModelID,
+			"cancelled": 3,
+		})
+	})
+
+	server := &http.Server{Handler: mux}
+	go server.Serve(listener)
+	t.Cleanup(func() { server.Close() })
+
+	client := NewClient("http://" + listener.Addr().String())
+	err = client.ClearQueue("flux-schnell")
+	if err != nil {
+		t.Fatalf("ClearQueue() error: %v", err)
+	}
+	if gotModelID != "flux-schnell" {
+		t.Errorf("model ID = %q, want %q", gotModelID, "flux-schnell")
+	}
+}
+
 func ptrFloat(v float64) *float64 { return &v }

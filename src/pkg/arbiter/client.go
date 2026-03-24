@@ -107,3 +107,25 @@ func (c *Client) SetMaxInstances(modelID string, max int) error {
 
 	return nil
 }
+
+// ClearQueue cancels all queued jobs for a model via
+// DELETE /v1/models/{id}/queue.
+func (c *Client) ClearQueue(modelID string) error {
+	req, err := http.NewRequest(http.MethodDelete, c.baseURL+"/v1/models/"+modelID+"/queue", nil)
+	if err != nil {
+		return fmt.Errorf("create request: %w", err)
+	}
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return fmt.Errorf("clear queue for %s: %w", modelID, err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("clear queue for %s: status %d: %s", modelID, resp.StatusCode, string(respBody))
+	}
+
+	return nil
+}

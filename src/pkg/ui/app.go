@@ -62,7 +62,7 @@ var (
 )
 
 // Column widths: Model (flexed), State, Max, VRAM, Active, Queued
-var colWidths = [6]unit.Dp{0, 90, 50, 80, 80, 80} // model name is flexed
+var colWidths = [6]unit.Dp{0, 90, 64, 80, 80, 80} // model name is flexed
 
 // App holds the Spark View application state.
 type App struct {
@@ -76,12 +76,13 @@ type App struct {
 	lastErr     error
 	connected   bool
 
-	list    widget.List
-	rowTags []bool // stable pointer tags for row right-click detection
+	list      widget.List
+	maxTags   []bool // pointer tags for max-instances column right-click
+	queueTags []bool // pointer tags for queued column right-click
 
 	ctxMenu     menu.ContextMenu
+	ctxMenuType string // "max" or "clear"
 	ctxModelID  string // model ID for the open context menu
-	ctxModelMax int    // current max instances for the open context menu
 }
 
 // NewApp creates a new Spark View application.
@@ -156,16 +157,25 @@ func (a *App) Layout(gtx layout.Context) layout.Dimensions {
 
 	// Context menu overlay — rendered last so it appears on top
 	result := a.ctxMenu.Layout(gtx, a.theme)
-	if result.OK && result.Index >= 0 && result.Index <= 9 {
+	if result.OK {
 		modelID := a.ctxModelID
-		newMax := result.Index
-		go func() {
-			if err := a.client.SetMaxInstances(modelID, newMax); err != nil {
-				// Error will be visible on next refresh cycle
-				return
-			}
-			a.Refresh()
-		}()
+		switch a.ctxMenuType {
+		case "max":
+			newMax := result.Index
+			go func() {
+				if err := a.client.SetMaxInstances(modelID, newMax); err != nil {
+					return
+				}
+				a.Refresh()
+			}()
+		case "clear":
+			go func() {
+				if err := a.client.ClearQueue(modelID); err != nil {
+					return
+				}
+				a.Refresh()
+			}()
+		}
 	}
 
 	return dims
@@ -270,12 +280,18 @@ func (a *App) layoutTable(gtx layout.Context, status arbiter.Status) layout.Dime
 	})
 }
 
-// ensureRowTags ensures we have enough pointer tags for right-click detection.
-func (a *App) ensureRowTags(n int) {
-	for len(a.rowTags) < n {
-		a.rowTags = append(a.rowTags, false)
+// ensureTags grows a tag slice to at least n elements.
+func ensureTags(tags *[]bool, n int) {
+	for len(*tags) < n {
+		*tags = append(*tags, false)
 	}
 }
+
+// colIndex constants for interactive columns.
+const (
+	colMax    = 2 // Max instances column
+	colQueued = 5 // Queued jobs column
+)
 
 func (a *App) layoutRow(gtx layout.Context, m arbiter.Model, index int) layout.Dimensions {
 	rowH := gtx.Dp(unit.Dp(36))
@@ -290,35 +306,6 @@ func (a *App) layoutRow(gtx layout.Context, m arbiter.Model, index int) layout.D
 	default:
 		if index%2 == 0 {
 			paint.FillShape(gtx.Ops, rowAltColor, clip.Rect{Max: image.Pt(totalW, rowH)}.Op())
-		}
-	}
-
-	// Right-click event area for context menu
-	a.ensureRowTags(index + 1)
-	rowArea := clip.Rect{Max: image.Pt(totalW, rowH)}.Push(gtx.Ops)
-	event.Op(gtx.Ops, &a.rowTags[index])
-	rowArea.Pop()
-
-	for {
-		ev, ok := gtx.Event(pointer.Filter{
-			Target: &a.rowTags[index],
-			Kinds:  pointer.Press,
-		})
-		if !ok {
-			break
-		}
-		if e, ok := ev.(pointer.Event); ok && e.Buttons.Contain(pointer.ButtonSecondary) {
-			a.ctxModelID = m.ID
-			a.ctxModelMax = m.MaxInstances
-			items := make([]menu.Item, 10)
-			for i := range 10 {
-				label := fmt.Sprintf("%d", i)
-				if i == m.MaxInstances {
-					label += "  *"
-				}
-				items[i] = menu.Item{Label: label}
-			}
-			a.ctxMenu.Show(image.Pt(int(e.Position.X), int(e.Position.Y)), items)
 		}
 	}
 
@@ -340,10 +327,7 @@ func (a *App) layoutRow(gtx layout.Context, m arbiter.Model, index int) layout.D
 	}
 
 	maxText := fmt.Sprintf("%d", m.MaxInstances)
-	maxColor := textMuted
-	if m.MaxInstances > 1 {
-		maxColor = accentCyan
-	}
+	maxColor := textSecondary
 
 	activeColor := textMuted
 	activeText := fmt.Sprintf("%d", m.ActiveJobs)
@@ -375,14 +359,14 @@ func (a *App) layoutRow(gtx layout.Context, m arbiter.Model, index int) layout.D
 	columns := []colData{
 		{m.ID, nameW, text.Start, nameColor, true},
 		{stateText, gtx.Dp(colWidths[1]), text.Start, stateColor, false},
-		{maxText, gtx.Dp(colWidths[2]), text.End, maxColor, false},
+		{maxText, gtx.Dp(colWidths[colMax]), text.End, maxColor, false},
 		{vramText, gtx.Dp(colWidths[3]), text.End, vramColor, false},
 		{activeText, gtx.Dp(colWidths[4]), text.End, activeColor, false},
-		{queuedText, gtx.Dp(colWidths[5]), text.End, queuedColor, false},
+		{queuedText, gtx.Dp(colWidths[colQueued]), text.End, queuedColor, false},
 	}
 
 	x := 0
-	for _, col := range columns {
+	for colIdx, col := range columns {
 		offset := op.Offset(image.Pt(x, 0)).Push(gtx.Ops)
 		gtxCol := gtx
 		gtxCol.Constraints = layout.Exact(image.Pt(col.width, rowH))
@@ -402,6 +386,9 @@ func (a *App) layoutRow(gtx layout.Context, m arbiter.Model, index int) layout.D
 			return l.Layout(gtx)
 		})
 
+		// Right-click areas on interactive columns
+		a.layoutColumnClickArea(gtx, m, index, colIdx, col.width, rowH)
+
 		offset.Pop()
 		x += col.width
 	}
@@ -414,6 +401,55 @@ func (a *App) layoutRow(gtx layout.Context, m arbiter.Model, index int) layout.D
 	sepOff.Pop()
 
 	return layout.Dimensions{Size: image.Pt(totalW, rowH)}
+}
+
+// layoutColumnClickArea registers right-click event areas on interactive columns.
+func (a *App) layoutColumnClickArea(gtx layout.Context, m arbiter.Model, rowIdx, colIdx, colW, rowH int) {
+	var tag *bool
+	switch colIdx {
+	case colMax:
+		ensureTags(&a.maxTags, rowIdx+1)
+		tag = &a.maxTags[rowIdx]
+	case colQueued:
+		ensureTags(&a.queueTags, rowIdx+1)
+		tag = &a.queueTags[rowIdx]
+	default:
+		return
+	}
+
+	area := clip.Rect{Max: image.Pt(colW, rowH)}.Push(gtx.Ops)
+	event.Op(gtx.Ops, tag)
+	area.Pop()
+
+	for {
+		ev, ok := gtx.Event(pointer.Filter{Target: tag, Kinds: pointer.Press})
+		if !ok {
+			break
+		}
+		e, ok := ev.(pointer.Event)
+		if !ok || !e.Buttons.Contain(pointer.ButtonSecondary) {
+			continue
+		}
+		a.ctxModelID = m.ID
+		switch colIdx {
+		case colMax:
+			a.ctxMenuType = "max"
+			items := make([]menu.Item, 10)
+			for i := range 10 {
+				label := fmt.Sprintf("%d", i)
+				if i == m.MaxInstances {
+					label += "  *"
+				}
+				items[i] = menu.Item{Label: label}
+			}
+			a.ctxMenu.Show(image.Pt(int(e.Position.X), int(e.Position.Y)), items)
+		case colQueued:
+			a.ctxMenuType = "clear"
+			a.ctxMenu.Show(image.Pt(int(e.Position.X), int(e.Position.Y)), []menu.Item{
+				{Label: "Clear Queue", Color: accentRed},
+			})
+		}
+	}
 }
 
 func (a *App) layoutStatusBar(gtx layout.Context, status arbiter.Status, connected bool, lastErr error, lastRefresh time.Time) layout.Dimensions {
