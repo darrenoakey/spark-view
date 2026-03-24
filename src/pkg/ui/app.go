@@ -442,10 +442,10 @@ func (a *App) layoutColumnClickArea(gtx layout.Context, m arbiter.Model, rowIdx,
 				}
 				items[i] = menu.Item{Label: label}
 			}
-			a.ctxMenu.Show(image.Pt(int(e.Position.X), int(e.Position.Y)), items)
+			a.ctxMenu.Show(items)
 		case colQueued:
 			a.ctxMenuType = "clear"
-			a.ctxMenu.Show(image.Pt(int(e.Position.X), int(e.Position.Y)), []menu.Item{
+			a.ctxMenu.Show([]menu.Item{
 				{Label: "Clear Queue", Color: accentRed},
 			})
 		}
