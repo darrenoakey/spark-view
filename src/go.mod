@@ -2,7 +2,10 @@ module sparkview
 
 go 1.26.1
 
-require gioui.org v0.9.0
+require (
+	gioui.org v0.9.0
+	github.com/darrenoakey/daz-golang-gio v0.0.2
+)
 
 require (
 	gioui.org/shader v1.0.8 // indirect

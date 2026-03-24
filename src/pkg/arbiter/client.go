@@ -33,11 +33,12 @@ type Queue struct {
 
 // Status is the response from GET /v1/ps.
 type Status struct {
-	VRAMBudgetGB     float64 `json:"vram_budget_gb"`
-	VRAMUsedGB       float64 `json:"vram_used_gb"`
-	VRAMConfiguredGB float64 `json:"vram_configured_gb"`
-	Models           []Model `json:"models"`
-	Queue            Queue   `json:"queue"`
+	VRAMBudgetGB      float64 `json:"vram_budget_gb"`
+	VRAMUsedGB        float64 `json:"vram_used_gb"`
+	VRAMConfiguredGB  float64 `json:"vram_configured_gb"`
+	GPUUtilizationPct int     `json:"gpu_utilization_pct"`
+	Models            []Model `json:"models"`
+	Queue             Queue   `json:"queue"`
 }
 
 // Client communicates with the Arbiter server.

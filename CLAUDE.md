@@ -5,9 +5,14 @@ GPU inference dashboard for the Arbiter server on spark (10.0.0.254:8400).
 ## Architecture
 
 - **Go + Gio** (immediate-mode desktop GUI)
-- Polls `GET /v1/ps` every 1 second for VRAM, model, and queue status
+- Polls `GET /v1/ps` with 3s sleep between requests for VRAM, model, and queue status
 - Dark theme with cyan/green/purple accent palette
 - Window size/position persistence (JSON + NSWindow autosave)
+
+## Build & Deploy
+
+- `./run rebuild` — build and restart via auto (the ONLY way to deploy changes)
+- Never launch the binary directly — always use auto for process management
 
 ## Gio Gotchas
 

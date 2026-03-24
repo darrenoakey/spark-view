@@ -18,6 +18,7 @@ usage() {
     echo "  lint               Run gofmt, go vet, and golangci-lint"
     echo "  check              Full quality gate (lint + all tests)"
     echo "  run [args]         Build and run the main binary"
+    echo "  rebuild            Build and restart via auto"
     exit 1
 }
 
@@ -95,11 +96,18 @@ cmd_run() {
     exec "$BIN_DIR/sparkview" "$@"
 }
 
+cmd_rebuild() {
+    cmd_build
+    echo "==> Restarting via auto..."
+    ~/local/auto/run -q restart sparkview
+}
+
 case "${1:-}" in
     build) shift; cmd_build "$@" ;;
     test)  shift; cmd_test "$@" ;;
     lint)  shift; cmd_lint "$@" ;;
     check) shift; cmd_check "$@" ;;
-    run)   shift; cmd_run "$@" ;;
-    *)     usage ;;
+    run)     shift; cmd_run "$@" ;;
+    rebuild) shift; cmd_rebuild "$@" ;;
+    *)       usage ;;
 esac

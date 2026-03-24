@@ -4,7 +4,6 @@ package main
 import (
 	"fmt"
 	"os"
-	"path/filepath"
 	"runtime"
 	"time"
 
@@ -13,6 +12,7 @@ import (
 
 	"gioui.org/app"
 	"gioui.org/op"
+	"github.com/darrenoakey/daz-golang-gio/persist"
 )
 
 func main() {
@@ -23,55 +23,19 @@ func main() {
 }
 
 func run() error {
-	exe, err := os.Executable()
-	if err != nil {
-		return fmt.Errorf("finding executable: %w", err)
-	}
-	resolved, err := filepath.EvalSymlinks(exe)
-	if err != nil {
-		resolved = exe
-	}
-	projectRoot := filepath.Dir(filepath.Dir(filepath.Dir(resolved)))
-	localDir := filepath.Join(projectRoot, "local")
-	windowPath := filepath.Join(localDir, "window.json")
-
-	windowState, err := ui.NewWindowPersist(windowPath)
-	if err != nil {
-		return fmt.Errorf("loading window state: %w", err)
-	}
-
 	client := arbiter.NewClient(arbiter.DefaultURL)
 
 	setDockIcon()
 
 	go func() {
-		win := new(app.Window)
-		win.Option(app.Title("Spark View"))
-		windowState.Apply(win)
+		win := persist.NewWindow("sparkview", app.Title("Spark View"))
 
-		// Restore position after the first frame renders.
-		// Must be delayed: Gio/macOS places the window during the first
-		// FrameEvent, so our position must come after that.
-		posRestored := false
-
-		dashboard := ui.NewApp(win, client)
-
-		go dashboard.Refresh()
+		dashboard := ui.NewApp(win.Window, client)
 
 		go func() {
-			ticker := time.NewTicker(1 * time.Second)
-			defer ticker.Stop()
-			for range ticker.C {
+			for {
 				dashboard.Refresh()
-			}
-		}()
-
-		// Poll for position changes every 2 seconds (Gio has no move event)
-		go func() {
-			ticker := time.NewTicker(2 * time.Second)
-			defer ticker.Stop()
-			for range ticker.C {
-				windowState.UpdateGeometry(0, 0)
+				time.Sleep(3 * time.Second)
 			}
 		}()
 
@@ -79,24 +43,15 @@ func run() error {
 		for {
 			switch e := win.Event().(type) {
 			case app.DestroyEvent:
+				win.Close()
 				if e.Err != nil {
 					fmt.Fprintf(os.Stderr, "error: %v\n", e.Err)
 				}
 				os.Exit(0)
-			case app.ConfigEvent:
-				c := e.Config
-				windowState.UpdateGeometry(c.Size.X, c.Size.Y)
 			case app.FrameEvent:
 				gtx := app.NewContext(&ops, e)
 				dashboard.Layout(gtx)
 				e.Frame(gtx.Ops)
-				if !posRestored {
-					posRestored = true
-					go func() {
-						time.Sleep(100 * time.Millisecond)
-						windowState.RestorePosition()
-					}()
-				}
 			}
 		}
 	}()

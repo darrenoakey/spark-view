@@ -130,6 +130,9 @@ func (a *App) Layout(gtx layout.Context) layout.Dimensions {
 			if !connected && lastRefresh.IsZero() {
 				return a.layoutConnecting(gtx)
 			}
+			if !connected {
+				return a.layoutDisconnected(gtx, lastErr)
+			}
 			return a.layoutTable(gtx, status)
 		}),
 		// Bottom separator
@@ -203,6 +206,35 @@ func (a *App) layoutConnecting(gtx layout.Context) layout.Dimensions {
 		l.Color = textMuted
 		l.TextSize = unit.Sp(14)
 		return l.Layout(gtx)
+	})
+}
+
+func (a *App) layoutDisconnected(gtx layout.Context, lastErr error) layout.Dimensions {
+	// Red-tinted background fill
+	bannerBG := color.NRGBA{R: 0x3a, G: 0x0a, B: 0x0a, A: 0xff}
+	paint.FillShape(gtx.Ops, bannerBG, clip.Rect{Max: gtx.Constraints.Max}.Op())
+
+	return layout.Center.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		return layout.Flex{Axis: layout.Vertical, Alignment: layout.Middle}.Layout(gtx,
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+				l := material.H3(a.theme, "SERVER DOWN")
+				l.Color = accentRed
+				l.Font.Weight = font.Bold
+				l.Alignment = text.Middle
+				return l.Layout(gtx)
+			}),
+			layout.Rigid(layout.Spacer{Height: unit.Dp(12)}.Layout),
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+				msg := "Connection to Arbiter lost"
+				if lastErr != nil {
+					msg = lastErr.Error()
+				}
+				l := material.Body1(a.theme, msg)
+				l.Color = textMuted
+				l.Alignment = text.Middle
+				return l.Layout(gtx)
+			}),
+		)
 	})
 }
 
@@ -361,6 +393,32 @@ func (a *App) layoutStatusBar(gtx layout.Context, status arbiter.Status, connect
 					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 						return layout.Inset{Left: unit.Dp(8)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 							l := material.Body2(a.theme, fmt.Sprintf("%.1f / %.0f GB", status.VRAMUsedGB, status.VRAMBudgetGB))
+							l.Color = textSecondary
+							l.TextSize = unit.Sp(10)
+							return l.Layout(gtx)
+						})
+					}),
+					// GPU utilization label
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+						return layout.Inset{Left: unit.Dp(20)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+							l := material.Body2(a.theme, "GPU")
+							l.Color = textMuted
+							l.TextSize = unit.Sp(10)
+							return l.Layout(gtx)
+						})
+					}),
+					// GPU utilization gauge
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+						return layout.Inset{Left: unit.Dp(8)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+							gtx.Constraints.Min.X = gtx.Dp(unit.Dp(60))
+							gtx.Constraints.Max.X = gtx.Dp(unit.Dp(60))
+							return a.layoutGaugeBar(gtx, float64(status.GPUUtilizationPct), 100)
+						})
+					}),
+					// GPU utilization percentage
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+						return layout.Inset{Left: unit.Dp(8)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+							l := material.Body2(a.theme, fmt.Sprintf("%d%%", status.GPUUtilizationPct))
 							l.Color = textSecondary
 							l.TextSize = unit.Sp(10)
 							return l.Layout(gtx)
