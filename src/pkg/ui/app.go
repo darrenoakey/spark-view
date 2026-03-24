@@ -13,6 +13,8 @@ import (
 
 	"gioui.org/app"
 	"gioui.org/font"
+	"gioui.org/io/event"
+	"gioui.org/io/pointer"
 	"gioui.org/layout"
 	"gioui.org/op"
 	"gioui.org/op/clip"
@@ -21,6 +23,8 @@ import (
 	"gioui.org/unit"
 	"gioui.org/widget"
 	"gioui.org/widget/material"
+
+	"github.com/darrenoakey/daz-golang-gio/menu"
 )
 
 // Design tokens — dark theme with vibrant accents.
@@ -57,8 +61,8 @@ var (
 	dotUnloaded = color.NRGBA{R: 0x44, G: 0x44, B: 0x55, A: 0xff}
 )
 
-// Column widths: Model (flexed), State, VRAM, Active, Queued, Idle
-var colWidths = [5]unit.Dp{0, 90, 80, 80, 80} // model name is flexed
+// Column widths: Model (flexed), State, Max, VRAM, Active, Queued
+var colWidths = [6]unit.Dp{0, 90, 50, 80, 80, 80} // model name is flexed
 
 // App holds the Spark View application state.
 type App struct {
@@ -72,7 +76,12 @@ type App struct {
 	lastErr     error
 	connected   bool
 
-	list widget.List
+	list    widget.List
+	rowTags []bool // stable pointer tags for row right-click detection
+
+	ctxMenu     menu.ContextMenu
+	ctxModelID  string // model ID for the open context menu
+	ctxModelMax int    // current max instances for the open context menu
 }
 
 // NewApp creates a new Spark View application.
@@ -117,7 +126,7 @@ func (a *App) Layout(gtx layout.Context) layout.Dimensions {
 	lastRefresh := a.lastRefresh
 	a.mu.Unlock()
 
-	return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
+	dims := layout.Flex{Axis: layout.Vertical}.Layout(gtx,
 		// Table header
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 			return a.layoutHeader(gtx)
@@ -144,6 +153,22 @@ func (a *App) Layout(gtx layout.Context) layout.Dimensions {
 			return a.layoutStatusBar(gtx, status, connected, lastErr, lastRefresh)
 		}),
 	)
+
+	// Context menu overlay — rendered last so it appears on top
+	result := a.ctxMenu.Layout(gtx, a.theme)
+	if result.OK && result.Index >= 0 && result.Index <= 9 {
+		modelID := a.ctxModelID
+		newMax := result.Index
+		go func() {
+			if err := a.client.SetMaxInstances(modelID, newMax); err != nil {
+				// Error will be visible on next refresh cycle
+				return
+			}
+			a.Refresh()
+		}()
+	}
+
+	return dims
 }
 
 func (a *App) layoutHeader(gtx layout.Context) layout.Dimensions {
@@ -159,6 +184,7 @@ func (a *App) layoutHeader(gtx layout.Context) layout.Dimensions {
 	cols := []headerCol{
 		{"Model", text.Start},
 		{"State", text.Start},
+		{"Max", text.End},
 		{"VRAM", text.End},
 		{"Active", text.End},
 		{"Queued", text.End},
@@ -244,6 +270,13 @@ func (a *App) layoutTable(gtx layout.Context, status arbiter.Status) layout.Dime
 	})
 }
 
+// ensureRowTags ensures we have enough pointer tags for right-click detection.
+func (a *App) ensureRowTags(n int) {
+	for len(a.rowTags) < n {
+		a.rowTags = append(a.rowTags, false)
+	}
+}
+
 func (a *App) layoutRow(gtx layout.Context, m arbiter.Model, index int) layout.Dimensions {
 	rowH := gtx.Dp(unit.Dp(36))
 	totalW := gtx.Constraints.Max.X
@@ -257,6 +290,35 @@ func (a *App) layoutRow(gtx layout.Context, m arbiter.Model, index int) layout.D
 	default:
 		if index%2 == 0 {
 			paint.FillShape(gtx.Ops, rowAltColor, clip.Rect{Max: image.Pt(totalW, rowH)}.Op())
+		}
+	}
+
+	// Right-click event area for context menu
+	a.ensureRowTags(index + 1)
+	rowArea := clip.Rect{Max: image.Pt(totalW, rowH)}.Push(gtx.Ops)
+	event.Op(gtx.Ops, &a.rowTags[index])
+	rowArea.Pop()
+
+	for {
+		ev, ok := gtx.Event(pointer.Filter{
+			Target: &a.rowTags[index],
+			Kinds:  pointer.Press,
+		})
+		if !ok {
+			break
+		}
+		if e, ok := ev.(pointer.Event); ok && e.Buttons.Contain(pointer.ButtonSecondary) {
+			a.ctxModelID = m.ID
+			a.ctxModelMax = m.MaxInstances
+			items := make([]menu.Item, 10)
+			for i := range 10 {
+				label := fmt.Sprintf("%d", i)
+				if i == m.MaxInstances {
+					label += "  *"
+				}
+				items[i] = menu.Item{Label: label}
+			}
+			a.ctxMenu.Show(image.Pt(int(e.Position.X), int(e.Position.Y)), items)
 		}
 	}
 
@@ -275,6 +337,12 @@ func (a *App) layoutRow(gtx layout.Context, m arbiter.Model, index int) layout.D
 	stateText := m.State
 	if m.State == "loaded" {
 		stateColor = accentGreen
+	}
+
+	maxText := fmt.Sprintf("%d", m.MaxInstances)
+	maxColor := textMuted
+	if m.MaxInstances > 1 {
+		maxColor = accentCyan
 	}
 
 	activeColor := textMuted
@@ -307,9 +375,10 @@ func (a *App) layoutRow(gtx layout.Context, m arbiter.Model, index int) layout.D
 	columns := []colData{
 		{m.ID, nameW, text.Start, nameColor, true},
 		{stateText, gtx.Dp(colWidths[1]), text.Start, stateColor, false},
-		{vramText, gtx.Dp(colWidths[2]), text.End, vramColor, false},
-		{activeText, gtx.Dp(colWidths[3]), text.End, activeColor, false},
-		{queuedText, gtx.Dp(colWidths[4]), text.End, queuedColor, false},
+		{maxText, gtx.Dp(colWidths[2]), text.End, maxColor, false},
+		{vramText, gtx.Dp(colWidths[3]), text.End, vramColor, false},
+		{activeText, gtx.Dp(colWidths[4]), text.End, activeColor, false},
+		{queuedText, gtx.Dp(colWidths[5]), text.End, queuedColor, false},
 	}
 
 	x := 0

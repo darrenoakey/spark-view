@@ -2,6 +2,7 @@
 package arbiter
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -14,12 +15,13 @@ const DefaultURL = "http://10.0.0.254:8400"
 
 // Model represents a single model's status in the Arbiter system.
 type Model struct {
-	ID          string   `json:"id"`
-	State       string   `json:"state"`
-	MemoryGB    float64  `json:"memory_gb"`
-	ActiveJobs  int      `json:"active_jobs"`
-	QueuedJobs  int      `json:"queued_jobs"`
-	IdleSeconds *float64 `json:"idle_seconds"`
+	ID           string   `json:"id"`
+	State        string   `json:"state"`
+	MemoryGB     float64  `json:"memory_gb"`
+	ActiveJobs   int      `json:"active_jobs"`
+	QueuedJobs   int      `json:"queued_jobs"`
+	IdleSeconds  *float64 `json:"idle_seconds"`
+	MaxInstances int      `json:"max_instances"`
 }
 
 // Queue holds global job counts across all models.
@@ -76,4 +78,32 @@ func (c *Client) PS() (Status, error) {
 	}
 
 	return status, nil
+}
+
+// SetMaxInstances updates the maximum instance count for a model via
+// PATCH /v1/models/{id}.
+func (c *Client) SetMaxInstances(modelID string, max int) error {
+	body, err := json.Marshal(map[string]int{"max_instances": max})
+	if err != nil {
+		return fmt.Errorf("marshal max_instances: %w", err)
+	}
+
+	req, err := http.NewRequest(http.MethodPatch, c.baseURL+"/v1/models/"+modelID, bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("create request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return fmt.Errorf("set max instances for %s: %w", modelID, err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("set max instances for %s: status %d: %s", modelID, resp.StatusCode, string(respBody))
+	}
+
+	return nil
 }
