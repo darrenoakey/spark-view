@@ -74,4 +74,4 @@ If a model has jobs piling up in its queue that you want to cancel, right-click 
 
 ## License
 
-This project is licensed under [CC BY-NC 4.0](https://darren-static.waft.dev) - free to use and modify, but no commercial use without permission.
+This project is licensed under [CC BY-NC 4.0](https://darren-static.waft.dev/license) - free to use and modify, but no commercial use without permission.
