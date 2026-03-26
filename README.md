@@ -71,3 +71,7 @@ If a model has jobs piling up in its queue that you want to cancel, right-click 
 - **Queue clearing is immediate.** When you clear a queue, it happens right away — there's no confirmation prompt. Make sure you mean it before you click!
 
 - **If the connection indicator shows a problem**, double-check that your Arbiter server is running and reachable. The dashboard will automatically reconnect once the server is back.
+
+## License
+
+This project is licensed under [CC BY-NC 4.0](https://darren-static.waft.dev) - free to use and modify, but no commercial use without permission.
