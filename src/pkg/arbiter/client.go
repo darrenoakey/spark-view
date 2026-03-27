@@ -17,7 +17,8 @@ const DefaultURL = "http://10.0.0.254:8400"
 type Model struct {
 	ID            string   `json:"id"`
 	State         string   `json:"state"`
-	MemoryGB      float64  `json:"memory_gb"`
+	MemoryGB      float64  `json:"memory_gb"` // allocated/configured memory
+	VRAMGB        float64  `json:"vram_gb"`   // actual VRAM usage (when loaded)
 	ActiveJobs    int      `json:"active_jobs"`
 	QueuedJobs    int      `json:"queued_jobs"`
 	IdleSeconds   *float64 `json:"idle_seconds"`
@@ -38,6 +39,9 @@ type Queue struct {
 type Status struct {
 	VRAMBudgetGB      float64 `json:"vram_budget_gb"`
 	VRAMUsedGB        float64 `json:"vram_used_gb"`
+	VRAMActualGB      float64 `json:"vram_actual_gb"`
+	VRAMAllocatedGB   float64 `json:"vram_allocated_gb"`
+	VRAMFreeGB        float64 `json:"vram_free_gb"`
 	VRAMConfiguredGB  float64 `json:"vram_configured_gb"`
 	GPUUtilizationPct int     `json:"gpu_utilization_pct"`
 	Models            []Model `json:"models"`

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"runtime"
+	"sync"
 	"time"
 
 	"sparkview/pkg/arbiter"
@@ -30,8 +31,6 @@ func main() {
 func run() error {
 	client := arbiter.NewClient(arbiter.DefaultURL)
 
-	macos.SetDockIcon(dockIconBytes)
-
 	go func() {
 		win := persist.NewWindow("sparkview", app.Title("Spark View"))
 
@@ -45,6 +44,7 @@ func run() error {
 		}()
 
 		var ops op.Ops
+		var iconOnce sync.Once
 		for {
 			switch e := win.Event().(type) {
 			case app.DestroyEvent:
@@ -54,6 +54,7 @@ func run() error {
 				}
 				os.Exit(0)
 			case app.FrameEvent:
+				iconOnce.Do(func() { macos.SetDockIcon(dockIconBytes) })
 				gtx := app.NewContext(&ops, e)
 				dashboard.Layout(gtx)
 				e.Frame(gtx.Ops)

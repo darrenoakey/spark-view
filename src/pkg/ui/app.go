@@ -312,11 +312,11 @@ func (a *App) layoutRow(gtx layout.Context, m arbiter.Model, index int) layout.D
 	rowH := gtx.Dp(unit.Dp(36))
 	totalW := gtx.Constraints.Max.X
 
-	// Row background: active jobs > loaded > alternating
+	// Row background: active jobs > loaded/active > alternating
 	switch {
 	case m.ActiveJobs > 0:
 		paint.FillShape(gtx.Ops, rowActiveBG, clip.Rect{Max: image.Pt(totalW, rowH)}.Op())
-	case m.State == "loaded":
+	case m.State == "loaded" || m.State == "active":
 		paint.FillShape(gtx.Ops, rowLoadedBG, clip.Rect{Max: image.Pt(totalW, rowH)}.Op())
 	default:
 		if index%2 == 0 {
@@ -331,13 +331,13 @@ func (a *App) layoutRow(gtx layout.Context, m arbiter.Model, index int) layout.D
 
 	// Determine row colors based on state
 	nameColor := textSecondary
-	if m.State == "loaded" {
+	if m.State == "loaded" || m.State == "active" {
 		nameColor = textPrimary
 	}
 
 	stateColor := textMuted
 	stateText := m.State
-	if m.State == "loaded" {
+	if m.State == "loaded" || m.State == "active" {
 		stateColor = accentGreen
 	}
 
@@ -362,7 +362,11 @@ func (a *App) layoutRow(gtx layout.Context, m arbiter.Model, index int) layout.D
 	vramText := "-"
 	vramColor := textMuted
 	if m.State == "loaded" || m.State == "active" {
-		vramText = fmt.Sprintf("%.0f GB", m.MemoryGB)
+		if m.VRAMGB > 0 && m.VRAMGB != m.MemoryGB {
+			vramText = fmt.Sprintf("%.0f (%.0f)", m.VRAMGB, m.MemoryGB)
+		} else {
+			vramText = fmt.Sprintf("%.0f GB", m.MemoryGB)
+		}
 		vramColor = textSecondary
 	}
 
@@ -520,18 +524,19 @@ func (a *App) layoutStatusBar(gtx layout.Context, status arbiter.Status, connect
 							return l.Layout(gtx)
 						})
 					}),
-					// VRAM gauge
+					// VRAM gauge (based on actual usage)
 					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 						return layout.Inset{Left: unit.Dp(8)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 							gtx.Constraints.Min.X = gtx.Dp(unit.Dp(100))
 							gtx.Constraints.Max.X = gtx.Dp(unit.Dp(100))
-							return a.layoutGaugeBar(gtx, status.VRAMUsedGB, status.VRAMBudgetGB)
+							return a.layoutGaugeBar(gtx, status.VRAMActualGB, status.VRAMBudgetGB)
 						})
 					}),
-					// VRAM numbers
+					// VRAM numbers: actual (allocated) / budget
 					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 						return layout.Inset{Left: unit.Dp(8)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-							l := material.Body2(a.theme, fmt.Sprintf("%.1f / %.0f GB", status.VRAMUsedGB, status.VRAMBudgetGB))
+							l := material.Body2(a.theme, fmt.Sprintf("%.0f (%.0f) / %.0f GB",
+								status.VRAMActualGB, status.VRAMAllocatedGB, status.VRAMBudgetGB))
 							l.Color = textSecondary
 							l.TextSize = unit.Sp(10)
 							return l.Layout(gtx)

@@ -16,8 +16,11 @@ func TestPS(t *testing.T) {
 	}
 
 	fixture := Status{
-		VRAMBudgetGB: 100.0,
-		VRAMUsedGB:   37.0,
+		VRAMBudgetGB:    100.0,
+		VRAMUsedGB:      37.0,
+		VRAMActualGB:    43.0,
+		VRAMAllocatedGB: 77.0,
+		VRAMFreeGB:      23.0,
 		Models: []Model{
 			{
 				ID:            "flux-schnell",
@@ -63,6 +66,12 @@ func TestPS(t *testing.T) {
 
 	if status.VRAMBudgetGB != 100.0 {
 		t.Errorf("VRAMBudgetGB = %v, want 100.0", status.VRAMBudgetGB)
+	}
+	if status.VRAMActualGB != 43.0 {
+		t.Errorf("VRAMActualGB = %v, want 43.0", status.VRAMActualGB)
+	}
+	if status.VRAMAllocatedGB != 77.0 {
+		t.Errorf("VRAMAllocatedGB = %v, want 77.0", status.VRAMAllocatedGB)
 	}
 	if status.VRAMUsedGB != 37.0 {
 		t.Errorf("VRAMUsedGB = %v, want 37.0", status.VRAMUsedGB)
