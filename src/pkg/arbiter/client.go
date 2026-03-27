@@ -15,13 +15,14 @@ const DefaultURL = "http://10.0.0.254:8400"
 
 // Model represents a single model's status in the Arbiter system.
 type Model struct {
-	ID           string   `json:"id"`
-	State        string   `json:"state"`
-	MemoryGB     float64  `json:"memory_gb"`
-	ActiveJobs   int      `json:"active_jobs"`
-	QueuedJobs   int      `json:"queued_jobs"`
-	IdleSeconds  *float64 `json:"idle_seconds"`
-	MaxInstances int      `json:"max_instances"`
+	ID            string   `json:"id"`
+	State         string   `json:"state"`
+	MemoryGB      float64  `json:"memory_gb"`
+	ActiveJobs    int      `json:"active_jobs"`
+	QueuedJobs    int      `json:"queued_jobs"`
+	IdleSeconds   *float64 `json:"idle_seconds"`
+	MaxInstances  int      `json:"max_instances"`
+	MaxConcurrent int      `json:"max_concurrent"`
 }
 
 // Queue holds global job counts across all models.
@@ -80,12 +81,11 @@ func (c *Client) PS() (Status, error) {
 	return status, nil
 }
 
-// SetMaxInstances updates the maximum instance count for a model via
-// PATCH /v1/models/{id}.
-func (c *Client) SetMaxInstances(modelID string, max int) error {
-	body, err := json.Marshal(map[string]int{"max_instances": max})
+// PatchModel sends a PATCH /v1/models/{id} request with the given fields.
+func (c *Client) PatchModel(modelID string, fields map[string]int) error {
+	body, err := json.Marshal(fields)
 	if err != nil {
-		return fmt.Errorf("marshal max_instances: %w", err)
+		return fmt.Errorf("marshal patch body: %w", err)
 	}
 
 	req, err := http.NewRequest(http.MethodPatch, c.baseURL+"/v1/models/"+modelID, bytes.NewReader(body))
@@ -96,35 +96,36 @@ func (c *Client) SetMaxInstances(modelID string, max int) error {
 
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return fmt.Errorf("set max instances for %s: %w", modelID, err)
+		return fmt.Errorf("patch model %s: %w", modelID, err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("set max instances for %s: status %d: %s", modelID, resp.StatusCode, string(respBody))
+		return fmt.Errorf("patch model %s: status %d: %s", modelID, resp.StatusCode, string(respBody))
 	}
 
 	return nil
 }
 
-// ClearQueue cancels all queued jobs for a model via
-// DELETE /v1/models/{id}/queue.
-func (c *Client) ClearQueue(modelID string) error {
-	req, err := http.NewRequest(http.MethodDelete, c.baseURL+"/v1/models/"+modelID+"/queue", nil)
+// ClearJobs cancels jobs for a model. Pass "queue" to cancel only queued
+// jobs (DELETE /v1/models/{id}/queue) or "running" to cancel all queued
+// and running jobs (DELETE /v1/models/{id}/running).
+func (c *Client) ClearJobs(modelID, scope string) error {
+	req, err := http.NewRequest(http.MethodDelete, c.baseURL+"/v1/models/"+modelID+"/"+scope, nil)
 	if err != nil {
 		return fmt.Errorf("create request: %w", err)
 	}
 
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return fmt.Errorf("clear queue for %s: %w", modelID, err)
+		return fmt.Errorf("clear %s for %s: %w", scope, modelID, err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("clear queue for %s: status %d: %s", modelID, resp.StatusCode, string(respBody))
+		return fmt.Errorf("clear %s for %s: status %d: %s", scope, modelID, resp.StatusCode, string(respBody))
 	}
 
 	return nil

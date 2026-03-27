@@ -61,8 +61,8 @@ var (
 	dotUnloaded = color.NRGBA{R: 0x44, G: 0x44, B: 0x55, A: 0xff}
 )
 
-// Column widths: Model (flexed), State, Max, VRAM, Active, Queued
-var colWidths = [6]unit.Dp{0, 90, 64, 80, 80, 80} // model name is flexed
+// Column widths: Model (flexed), State, Max, Conc, VRAM, Active, Queued
+var colWidths = [7]unit.Dp{0, 90, 50, 50, 80, 80, 80} // model name is flexed
 
 // App holds the Spark View application state.
 type App struct {
@@ -78,10 +78,11 @@ type App struct {
 
 	list      widget.List
 	maxTags   []bool // pointer tags for max-instances column right-click
+	concTags  []bool // pointer tags for max-concurrent column right-click
 	queueTags []bool // pointer tags for queued column right-click
 
 	ctxMenu     menu.ContextMenu
-	ctxMenuType string // "max" or "clear"
+	ctxMenuType string // "max", "conc", or "clear"
 	ctxModelID  string // model ID for the open context menu
 }
 
@@ -163,14 +164,26 @@ func (a *App) Layout(gtx layout.Context) layout.Dimensions {
 		case "max":
 			newMax := result.Index
 			go func() {
-				if err := a.client.SetMaxInstances(modelID, newMax); err != nil {
+				if err := a.client.PatchModel(modelID, map[string]int{"max_instances": newMax}); err != nil {
 					return
 				}
 				a.Refresh()
 			}()
-		case "clear":
+		case "conc":
+			newConc := result.Index
 			go func() {
-				if err := a.client.ClearQueue(modelID); err != nil {
+				if err := a.client.PatchModel(modelID, map[string]int{"max_concurrent": newConc}); err != nil {
+					return
+				}
+				a.Refresh()
+			}()
+		case "clear_queue":
+			scope := "queue"
+			if result.Index == 1 {
+				scope = "running"
+			}
+			go func() {
+				if err := a.client.ClearJobs(modelID, scope); err != nil {
 					return
 				}
 				a.Refresh()
@@ -195,6 +208,7 @@ func (a *App) layoutHeader(gtx layout.Context) layout.Dimensions {
 		{"Model", text.Start},
 		{"State", text.Start},
 		{"Max", text.End},
+		{"Conc", text.End},
 		{"VRAM", text.End},
 		{"Active", text.End},
 		{"Queued", text.End},
@@ -290,7 +304,8 @@ func ensureTags(tags *[]bool, n int) {
 // colIndex constants for interactive columns.
 const (
 	colMax    = 2 // Max instances column
-	colQueued = 5 // Queued jobs column
+	colConc   = 3 // Max concurrent column
+	colQueued = 6 // Queued jobs column
 )
 
 func (a *App) layoutRow(gtx layout.Context, m arbiter.Model, index int) layout.Dimensions {
@@ -329,6 +344,9 @@ func (a *App) layoutRow(gtx layout.Context, m arbiter.Model, index int) layout.D
 	maxText := fmt.Sprintf("%d", m.MaxInstances)
 	maxColor := textSecondary
 
+	concText := fmt.Sprintf("%d", m.MaxConcurrent)
+	concColor := textSecondary
+
 	activeColor := textMuted
 	activeText := fmt.Sprintf("%d", m.ActiveJobs)
 	if m.ActiveJobs > 0 {
@@ -360,8 +378,9 @@ func (a *App) layoutRow(gtx layout.Context, m arbiter.Model, index int) layout.D
 		{m.ID, nameW, text.Start, nameColor, true},
 		{stateText, gtx.Dp(colWidths[1]), text.Start, stateColor, false},
 		{maxText, gtx.Dp(colWidths[colMax]), text.End, maxColor, false},
-		{vramText, gtx.Dp(colWidths[3]), text.End, vramColor, false},
-		{activeText, gtx.Dp(colWidths[4]), text.End, activeColor, false},
+		{concText, gtx.Dp(colWidths[colConc]), text.End, concColor, false},
+		{vramText, gtx.Dp(colWidths[4]), text.End, vramColor, false},
+		{activeText, gtx.Dp(colWidths[5]), text.End, activeColor, false},
 		{queuedText, gtx.Dp(colWidths[colQueued]), text.End, queuedColor, false},
 	}
 
@@ -410,6 +429,9 @@ func (a *App) layoutColumnClickArea(gtx layout.Context, m arbiter.Model, rowIdx,
 	case colMax:
 		ensureTags(&a.maxTags, rowIdx+1)
 		tag = &a.maxTags[rowIdx]
+	case colConc:
+		ensureTags(&a.concTags, rowIdx+1)
+		tag = &a.concTags[rowIdx]
 	case colQueued:
 		ensureTags(&a.queueTags, rowIdx+1)
 		tag = &a.queueTags[rowIdx]
@@ -443,10 +465,22 @@ func (a *App) layoutColumnClickArea(gtx layout.Context, m arbiter.Model, rowIdx,
 				items[i] = menu.Item{Label: label}
 			}
 			a.ctxMenu.Show(items)
+		case colConc:
+			a.ctxMenuType = "conc"
+			items := make([]menu.Item, 10)
+			for i := range 10 {
+				label := fmt.Sprintf("%d", i)
+				if i == m.MaxConcurrent {
+					label += "  *"
+				}
+				items[i] = menu.Item{Label: label}
+			}
+			a.ctxMenu.Show(items)
 		case colQueued:
-			a.ctxMenuType = "clear"
+			a.ctxMenuType = "clear_queue"
 			a.ctxMenu.Show([]menu.Item{
-				{Label: "Clear Queue", Color: accentRed},
+				{Label: "Clear Queue", Color: accentOrange},
+				{Label: "Clear All", Color: accentRed},
 			})
 		}
 	}

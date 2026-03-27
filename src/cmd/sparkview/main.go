@@ -2,6 +2,7 @@
 package main
 
 import (
+	_ "embed"
 	"fmt"
 	"os"
 	"runtime"
@@ -12,8 +13,12 @@ import (
 
 	"gioui.org/app"
 	"gioui.org/op"
+	"github.com/darrenoakey/daz-golang-gio/macos"
 	"github.com/darrenoakey/daz-golang-gio/persist"
 )
+
+//go:embed gui/icon.png
+var dockIconBytes []byte
 
 func main() {
 	if err := run(); err != nil {
@@ -25,7 +30,7 @@ func main() {
 func run() error {
 	client := arbiter.NewClient(arbiter.DefaultURL)
 
-	setDockIcon()
+	macos.SetDockIcon(dockIconBytes)
 
 	go func() {
 		win := persist.NewWindow("sparkview", app.Title("Spark View"))

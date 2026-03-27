@@ -4,7 +4,7 @@ go 1.26.1
 
 require (
 	gioui.org v0.9.0
-	github.com/darrenoakey/daz-golang-gio v0.0.4
+	github.com/darrenoakey/daz-golang-gio v0.0.5
 )
 
 require (

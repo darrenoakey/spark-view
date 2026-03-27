@@ -20,19 +20,21 @@ func TestPS(t *testing.T) {
 		VRAMUsedGB:   37.0,
 		Models: []Model{
 			{
-				ID:           "flux-schnell",
-				State:        "loaded",
-				MemoryGB:     32.0,
-				ActiveJobs:   1,
-				QueuedJobs:   3,
-				MaxInstances: 2,
+				ID:            "flux-schnell",
+				State:         "loaded",
+				MemoryGB:      32.0,
+				ActiveJobs:    1,
+				QueuedJobs:    3,
+				MaxInstances:  2,
+				MaxConcurrent: 1,
 			},
 			{
-				ID:           "sonic",
-				State:        "loaded",
-				MemoryGB:     5.0,
-				IdleSeconds:  ptrFloat(142.3),
-				MaxInstances: 1,
+				ID:            "sonic",
+				State:         "loaded",
+				MemoryGB:      5.0,
+				IdleSeconds:   ptrFloat(142.3),
+				MaxInstances:  1,
+				MaxConcurrent: 4,
 			},
 		},
 		Queue: Queue{
@@ -89,6 +91,12 @@ func TestPS(t *testing.T) {
 	if status.Models[1].MaxInstances != 1 {
 		t.Errorf("Models[1].MaxInstances = %d, want 1", status.Models[1].MaxInstances)
 	}
+	if status.Models[0].MaxConcurrent != 1 {
+		t.Errorf("Models[0].MaxConcurrent = %d, want 1", status.Models[0].MaxConcurrent)
+	}
+	if status.Models[1].MaxConcurrent != 4 {
+		t.Errorf("Models[1].MaxConcurrent = %d, want 4", status.Models[1].MaxConcurrent)
+	}
 }
 
 // TestPSError verifies the client handles server errors gracefully.
@@ -115,31 +123,27 @@ func TestPSError(t *testing.T) {
 	}
 }
 
-// TestSetMaxInstances verifies the client sends a correct PATCH request.
-func TestSetMaxInstances(t *testing.T) {
+// TestPatchModel verifies the client sends a correct PATCH request.
+func TestPatchModel(t *testing.T) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}
 
 	var gotModelID string
-	var gotMax int
+	var gotBody map[string]int
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("PATCH /v1/models/{id}", func(w http.ResponseWriter, r *http.Request) {
 		gotModelID = r.PathValue("id")
-		var body map[string]int
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		gotBody = make(map[string]int)
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
 			t.Errorf("decode body: %v", err)
 			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
-		gotMax = body["max_instances"]
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]int{
-			"max_instances":          gotMax,
-			"previous_max_instances": 1,
-		})
+		json.NewEncoder(w).Encode(gotBody)
 	})
 
 	server := &http.Server{Handler: mux}
@@ -147,20 +151,34 @@ func TestSetMaxInstances(t *testing.T) {
 	t.Cleanup(func() { server.Close() })
 
 	client := NewClient("http://" + listener.Addr().String())
-	err = client.SetMaxInstances("flux-schnell", 5)
+
+	// Test max_instances
+	err = client.PatchModel("flux-schnell", map[string]int{"max_instances": 5})
 	if err != nil {
-		t.Fatalf("SetMaxInstances() error: %v", err)
+		t.Fatalf("PatchModel(max_instances) error: %v", err)
 	}
 	if gotModelID != "flux-schnell" {
 		t.Errorf("model ID = %q, want %q", gotModelID, "flux-schnell")
 	}
-	if gotMax != 5 {
-		t.Errorf("max_instances = %d, want 5", gotMax)
+	if gotBody["max_instances"] != 5 {
+		t.Errorf("max_instances = %d, want 5", gotBody["max_instances"])
+	}
+
+	// Test max_concurrent
+	err = client.PatchModel("sonic", map[string]int{"max_concurrent": 8})
+	if err != nil {
+		t.Fatalf("PatchModel(max_concurrent) error: %v", err)
+	}
+	if gotModelID != "sonic" {
+		t.Errorf("model ID = %q, want %q", gotModelID, "sonic")
+	}
+	if gotBody["max_concurrent"] != 8 {
+		t.Errorf("max_concurrent = %d, want 8", gotBody["max_concurrent"])
 	}
 }
 
-// TestSetMaxInstancesError verifies the client handles server errors.
-func TestSetMaxInstancesError(t *testing.T) {
+// TestPatchModelError verifies the client handles server errors.
+func TestPatchModelError(t *testing.T) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("listen: %v", err)
@@ -177,28 +195,30 @@ func TestSetMaxInstancesError(t *testing.T) {
 	t.Cleanup(func() { server.Close() })
 
 	client := NewClient("http://" + listener.Addr().String())
-	err = client.SetMaxInstances("nonexistent", 3)
+	err = client.PatchModel("nonexistent", map[string]int{"max_instances": 3})
 	if err == nil {
-		t.Fatal("SetMaxInstances() should return error for 404 status")
+		t.Fatal("PatchModel() should return error for 404 status")
 	}
 }
 
-// TestClearQueue verifies the client sends a correct DELETE request.
-func TestClearQueue(t *testing.T) {
+// TestClearJobs verifies the client sends correct DELETE requests for
+// both "queue" and "running" scopes.
+func TestClearJobs(t *testing.T) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}
 
-	var gotModelID string
+	var gotPath string
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("DELETE /v1/models/{id}/queue", func(w http.ResponseWriter, r *http.Request) {
-		gotModelID = r.PathValue("id")
+	mux.HandleFunc("DELETE /v1/models/{id}/{scope}", func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]any{
-			"model_id":  gotModelID,
-			"cancelled": 3,
+			"model_id":          r.PathValue("id"),
+			"cancelled_queued":  3,
+			"cancelled_running": 1,
 		})
 	})
 
@@ -207,12 +227,23 @@ func TestClearQueue(t *testing.T) {
 	t.Cleanup(func() { server.Close() })
 
 	client := NewClient("http://" + listener.Addr().String())
-	err = client.ClearQueue("flux-schnell")
+
+	// Test queue scope
+	err = client.ClearJobs("flux-schnell", "queue")
 	if err != nil {
-		t.Fatalf("ClearQueue() error: %v", err)
+		t.Fatalf("ClearJobs(queue) error: %v", err)
 	}
-	if gotModelID != "flux-schnell" {
-		t.Errorf("model ID = %q, want %q", gotModelID, "flux-schnell")
+	if gotPath != "/v1/models/flux-schnell/queue" {
+		t.Errorf("path = %q, want /v1/models/flux-schnell/queue", gotPath)
+	}
+
+	// Test running scope (clears all)
+	err = client.ClearJobs("sonic", "running")
+	if err != nil {
+		t.Fatalf("ClearJobs(running) error: %v", err)
+	}
+	if gotPath != "/v1/models/sonic/running" {
+		t.Errorf("path = %q, want /v1/models/sonic/running", gotPath)
 	}
 }
 
