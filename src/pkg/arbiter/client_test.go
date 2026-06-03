@@ -51,11 +51,11 @@ func TestPS(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /v1/ps", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(fixture)
+		_ = json.NewEncoder(w).Encode(fixture)
 	})
 
 	server := &http.Server{Handler: mux}
-	go server.Serve(listener)
+	go func() { _ = server.Serve(listener) }()
 	t.Cleanup(func() { server.Close() })
 
 	client := NewClient("http://" + listener.Addr().String())
@@ -118,11 +118,11 @@ func TestPSError(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /v1/ps", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
-		w.Write([]byte("internal error"))
+		_, _ = w.Write([]byte("internal error"))
 	})
 
 	server := &http.Server{Handler: mux}
-	go server.Serve(listener)
+	go func() { _ = server.Serve(listener) }()
 	t.Cleanup(func() { server.Close() })
 
 	client := NewClient("http://" + listener.Addr().String())
@@ -152,11 +152,11 @@ func TestPatchModel(t *testing.T) {
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(gotBody)
+		_ = json.NewEncoder(w).Encode(gotBody)
 	})
 
 	server := &http.Server{Handler: mux}
-	go server.Serve(listener)
+	go func() { _ = server.Serve(listener) }()
 	t.Cleanup(func() { server.Close() })
 
 	client := NewClient("http://" + listener.Addr().String())
@@ -196,11 +196,11 @@ func TestPatchModelError(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("PATCH /v1/models/{id}", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
-		w.Write([]byte("model not found"))
+		_, _ = w.Write([]byte("model not found"))
 	})
 
 	server := &http.Server{Handler: mux}
-	go server.Serve(listener)
+	go func() { _ = server.Serve(listener) }()
 	t.Cleanup(func() { server.Close() })
 
 	client := NewClient("http://" + listener.Addr().String())
@@ -224,7 +224,7 @@ func TestClearJobs(t *testing.T) {
 	mux.HandleFunc("DELETE /v1/models/{id}/{scope}", func(w http.ResponseWriter, r *http.Request) {
 		gotPath = r.URL.Path
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]any{
+		_ = json.NewEncoder(w).Encode(map[string]any{
 			"model_id":          r.PathValue("id"),
 			"cancelled_queued":  3,
 			"cancelled_running": 1,
@@ -232,7 +232,7 @@ func TestClearJobs(t *testing.T) {
 	})
 
 	server := &http.Server{Handler: mux}
-	go server.Serve(listener)
+	go func() { _ = server.Serve(listener) }()
 	t.Cleanup(func() { server.Close() })
 
 	client := NewClient("http://" + listener.Addr().String())

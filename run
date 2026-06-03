@@ -18,7 +18,8 @@ usage() {
     echo "  lint               Run gofmt, go vet, and golangci-lint"
     echo "  check              Full quality gate (lint + all tests)"
     echo "  run [args]         Build and run the main binary"
-    echo "  rebuild            Build and restart via auto"
+    echo "  install            Install the supervising launcher to ~/bin/sparkview"
+    echo "  rebuild            Build, install launcher, and restart via auto"
     exit 1
 }
 
@@ -96,8 +97,22 @@ cmd_run() {
     exec "$BIN_DIR/sparkview" "$@"
 }
 
+cmd_install() {
+    # Install the supervising launcher as the entrypoint auto runs. The launcher
+    # (not the GUI binary) is what auto keeps alive; it relaunches the GUI on any
+    # exit — crash, Gio teardown panic, or intermittent macOS EDEADLK — so Spark
+    # View can never stay dead. See src/launcher/sparkview-launcher.
+    local launcher="$SRC_DIR/launcher/sparkview-launcher"
+    local target="$HOME/bin/sparkview"
+    echo "==> Installing launcher -> $target"
+    mkdir -p "$HOME/bin"
+    install -m 0755 "$launcher" "$target"
+    echo "    Installed."
+}
+
 cmd_rebuild() {
     cmd_build
+    cmd_install
     echo "==> Restarting via auto..."
     ~/local/auto/run -q restart sparkview
 }
@@ -108,6 +123,7 @@ case "${1:-}" in
     lint)  shift; cmd_lint "$@" ;;
     check) shift; cmd_check "$@" ;;
     run)     shift; cmd_run "$@" ;;
+    install) shift; cmd_install "$@" ;;
     rebuild) shift; cmd_rebuild "$@" ;;
     *)       usage ;;
 esac

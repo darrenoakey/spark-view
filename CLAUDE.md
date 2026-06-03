@@ -13,8 +13,33 @@ GPU inference dashboard for the Arbiter server on spark (10.0.0.254:8400).
 
 ## Build & Deploy
 
-- `./run rebuild` — build and restart via auto (the ONLY way to deploy changes)
+- `./run rebuild` — build, install the launcher, and restart via auto (the ONLY way to deploy changes)
+- `./run install` — (re)install the supervising launcher to `~/bin/sparkview`
 - Never launch the binary directly — always use auto for process management
+
+## Supervision (why it never dies)
+
+`auto` runs `~/bin/sparkview`, which is the supervising launcher
+(`src/launcher/sparkview-launcher`), NOT the GUI binary directly. Two layers keep
+Spark View alive:
+
+1. **auto watch agent** (`com.darrenoakey.auto` LaunchAgent, KeepAlive/RunAtLoad)
+   keeps the launcher process alive and brings it back after a reboot.
+2. **The launcher** relaunches the GUI binary (`output/bin/sparkview`) on EVERY
+   exit after a short delay.
+
+This defeats the three historical death modes seen in `output/logs/sparkview/`:
+- `Resource deadlock avoided` (EDEADLK) re-execing the Mach-O — a shell script
+  never EDEADLKs, and it only relaunches the GUI *after* the prior instance has
+  fully exited, so the overlapping-image race cannot occur.
+- `panic: runtime/cgo: misuse of an invalid Handle` — a Gio teardown panic when no
+  GUI session is available (boot/login, fast-user-switch, screen lock); the
+  launcher just retries until a session exists.
+- A clean window close — reopened, matching keep-alive intent.
+
+If the launcher itself is loaded but the watch agent is not, restarts still happen
+at the GUI level but not for the launcher process / reboots — verify with
+`launchctl list | grep darrenoakey.auto`.
 
 ## Gio Gotchas
 

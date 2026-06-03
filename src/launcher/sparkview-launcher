@@ -1,0 +1,66 @@
+#!/bin/bash
+# Supervising launcher for Spark View.
+#
+# Spark View is a Gio (immediate-mode) macOS GUI app. Three things have killed it
+# in the wild, all visible in output/logs/sparkview/:
+#
+#   1. "Resource deadlock avoided" (EDEADLK) when the process manager re-execs the
+#      Mach-O binary while a prior instance is still tearing down its image.
+#   2. "panic: runtime/cgo: misuse of an invalid Handle" inside Gio's window
+#      teardown when a window cannot be created (e.g. no GUI session yet at login,
+#      or during fast-user-switch / screen lock).
+#   3. A clean window close, which under a keep-alive supervisor should just reopen.
+#
+# This launcher is what `auto` keeps alive. Because it is a shell script it never
+# itself hits EDEADLK, and it relaunches the real GUI binary on EVERY exit after a
+# short delay. The binary is only ever relaunched AFTER the previous instance has
+# fully exited (the foreground call returns only when the child is reaped), so the
+# overlapping-image race that produces EDEADLK cannot occur. If an individual launch
+# still fails for any reason, the loop simply tries again. Net effect: Spark View
+# comes back within a couple of seconds no matter how it died.
+#
+# Overridable via environment (used by tests):
+#   SPARKVIEW_BIN             path to the GUI binary
+#   SPARKVIEW_RELAUNCH_DELAY  seconds to wait between launches (default 2)
+#   SPARKVIEW_LAUNCH_ONCE     if set, run the body exactly once (no loop)
+
+set -u
+
+BIN="${SPARKVIEW_BIN:-/Users/darrenoakey/src/spark view/output/bin/sparkview}"
+DELAY="${SPARKVIEW_RELAUNCH_DELAY:-2}"
+
+child_pid=""
+
+# Forward termination to the child and stop supervising, so that `auto stop`
+# (which signals the whole process group) shuts everything down cleanly.
+terminate() {
+    if [ -n "$child_pid" ] && kill -0 "$child_pid" 2>/dev/null; then
+        kill -TERM "$child_pid" 2>/dev/null
+        wait "$child_pid" 2>/dev/null
+    fi
+    exit 0
+}
+trap terminate TERM INT
+
+launch_once() {
+    if [ ! -x "$BIN" ]; then
+        # Binary missing or not yet built — wait and let the caller retry rather
+        # than spinning hot.
+        sleep "$DELAY"
+        return
+    fi
+    "$BIN" "$@" &
+    child_pid=$!
+    wait "$child_pid"
+    child_pid=""
+}
+
+if [ -n "${SPARKVIEW_LAUNCH_ONCE:-}" ]; then
+    launch_once "$@"
+    exit 0
+fi
+
+while true; do
+    launch_once "$@"
+    sleep "$DELAY"
+done
