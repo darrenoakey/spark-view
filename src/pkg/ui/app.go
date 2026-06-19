@@ -76,6 +76,7 @@ type App struct {
 	mu          sync.Mutex
 	status      arbiter.Status
 	lastRefresh time.Time // end of the most recent poll (success or failure)
+	lastSuccess time.Time // end of the most recent SUCCESSFUL poll (zero if never)
 	lastErr     error
 	connected   bool
 	// noRouteSince is when the current unbroken streak of "no route to
@@ -135,6 +136,7 @@ func (a *App) Refresh() {
 		a.lastErr = nil
 		a.connected = true
 		a.noRouteSince = time.Time{}
+		a.lastSuccess = now
 	}
 	a.lastRefresh = now
 	nowConnected := a.connected
@@ -187,6 +189,23 @@ func (a *App) SetNoRouteSinceForTest(t time.Time) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.noRouteSince = t
+}
+
+// LastSuccess returns when the most recent successful poll completed, or the zero
+// time if no poll has ever succeeded in this process. Safe from any goroutine.
+// The watchdog uses it to only restart out of a no-route streak that followed a
+// working connection (so a never-connected process never restart-loops).
+func (a *App) LastSuccess() time.Time {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.lastSuccess
+}
+
+// SetLastSuccessForTest sets the last-success timestamp directly. Test-only.
+func (a *App) SetLastSuccessForTest(t time.Time) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.lastSuccess = t
 }
 
 // isNoRouteToHost reports whether err is a routing-level failure — "no route to

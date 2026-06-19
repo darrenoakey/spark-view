@@ -74,29 +74,45 @@ Two defenses, both in `cmd/sparkview`:
   window legitimately stops drawing; a frame-based watchdog would restart-loop
   whenever the window is in the background.
 
-### The fifth death mode: stuck on "no route to host" (multi-homing)
+### The fifth death mode: stuck on "no route to host" (EHOSTUNREACH)
 
-If this Mac has **two active interfaces on the same subnet** (e.g. Ethernet
-`en7` and Wi-Fi `en0` both on 10.0.0.0/24), the route to spark flaps and a dial
-can return `connect: no route to host` (EHOSTUNREACH). The nasty part: once a
-**long-lived Go process** hits EHOSTUNREACH for a same-subnet host, it keeps
-returning it on every dial *even after the route recovers* — failing instantly
-with no packets on the wire (so `curl` from the shell works while Spark View is
-stuck "down", and the poll-liveness watchdog stays quiet because `lastRefresh`
-keeps advancing on the fast failures). A *fresh* process re-evaluates routing and
-connects fine. (Apple-stack apps using NSURLSession don't hit this — CFNetwork
-resets on network-change notifications; Go's `net/http` raw sockets do not. Only
-Spark View is exposed because it continuously polls a *same-subnet* host.)
+A dial to spark can fail instantly with `connect: no route to host`
+(EHOSTUNREACH) — zero packets on the wire, so `curl` and fresh processes reach
+spark fine while Spark View is stuck "down", and the poll-liveness watchdog stays
+quiet (`lastRefresh` keeps advancing on the fast failures). Two distinct causes
+produce it, both only affecting a *same-subnet* host like spark:
 
-Defense (`watchdog.go` + `ui.App`): the app classifies dial errors. Only routing
-failures (EHOSTUNREACH/ENETUNREACH, via `isNoRouteToHost`) start a `noRouteSince`
-streak; `connection refused`/timeout do NOT (the app recovers from those itself).
-If the routing streak lasts > `noRouteRestart` (45s), the watchdog exits so the
-launcher respawns a process that can re-route. Because refused/timeout never
-trip it, a genuine spark outage does **not** cause a restart loop.
+1. **Multi-homing.** Two active interfaces on one subnet (Ethernet `en7` + Wi-Fi
+   `en0`, both 10.0.0.0/24) make macOS flap the route. The `wifi-auto` daemon
+   (separate repo) powers Wi-Fi off while Ethernet is up to prevent this.
+2. **macOS Local Network privacy (the recurring one).** Since macOS 15, LAN
+   access is gated by TCC and attributed to the *responsible process* — here the
+   long-lived launcher. Spark View is an **unsigned, bundle-less binary launched
+   by a LaunchAgent**, so it cannot show the permission prompt; macOS allows it
+   for a grace window (~80 min observed) then re-evaluates to **denied**, and
+   every LAN dial then returns EHOSTUNREACH. Proof: the *same* binary connects
+   from Terminal (inherits Terminal's grant) and when run directly/under a fresh
+   process tree, but fails under the long-lived launcher; restarting the
+   **launcher** (a fresh responsible process) recovers it. (Apple-stack apps
+   don't hit this — they're signed/bundled and granted once.)
 
-The real fix is the network: don't run two interfaces on one subnet (prefer
-Ethernet when plugged, Wi-Fi when not). The app-side restart is a safety net.
+**The key subtlety:** recovery needs a fresh *responsible process*, i.e. a fresh
+**launcher**, NOT just a fresh GUI. Restarting only the GUI under the same
+(denied) launcher does nothing — that was a restart-loop bug.
+
+Defense (`watchdog.go` + `ui.App` + the launcher): the app classifies dial errors
+(`isNoRouteToHost` → EHOSTUNREACH/ENETUNREACH only; `refused`/timeout do not
+count, so a genuine spark outage never trips it). A streak that lasts
+> `noRouteRestart` (45s) **and follows a prior successful connection** makes the
+GUI exit with code **75**; the launcher treats 75 specially and exits too, so
+`auto` respawns the whole tree with a fresh Local Network grant. The
+prior-success gate means a never-connected process (real outage, or a denial with
+no grace) shows "down" instead of restart-looping. (A plain poll-loop wedge still
+exits 70 → GUI-only relaunch.)
+
+The proper permanent fix is to give Spark View a stable signed identity (a code-
+signed `.app` bundle with `NSLocalNetworkUsageDescription`) and grant it Local
+Network once in System Settings; the tree-restart is the no-interaction safety net.
 
 ## Gio Gotchas
 

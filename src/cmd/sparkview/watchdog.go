@@ -15,13 +15,26 @@ const (
 	watchdogInterval = 15 * time.Second // how often liveness is checked
 	watchdogStall    = 60 * time.Second // poll silence that counts as wedged
 	// noRouteRestart is how long an unbroken "no route to host" streak may last
-	// before we restart. macOS multi-homing on one subnet can wedge a long-lived
-	// process into returning EHOSTUNREACH on every dial even after the route is
-	// back; a fresh process re-evaluates routing and connects, so we exit and let
-	// the launcher respawn. Only routing failures count (not refused/timeout), so
-	// a genuine spark outage never triggers this — the app recovers from those on
-	// its own. Generous enough to ride out a brief unplug→Wi-Fi failover.
+	// before we restart. Two causes produce EHOSTUNREACH on a same-subnet host:
+	// (a) macOS multi-homing flapping the route, and (b) macOS Local Network
+	// privacy revoking this background app's LAN access after its grace window —
+	// both wedge a long-lived process while curl and fresh processes succeed.
+	// Only routing failures count (not refused/timeout), so a genuine spark
+	// outage never triggers this. Generous enough to ride out a brief
+	// unplug→Wi-Fi failover.
 	noRouteRestart = 45 * time.Second
+)
+
+// Watchdog exit codes. The launcher distinguishes them (see sparkview-launcher).
+const (
+	// exitRestartGUI: the poll loop wedged. A fresh GUI under the SAME launcher
+	// fixes it, so the launcher just relaunches the binary.
+	exitRestartGUI = 70
+	// exitRestartTree: sustained "no route to host". Recovery needs a fresh
+	// RESPONSIBLE PROCESS — restarting only the GUI keeps the same (denied)
+	// launcher, so the launcher must exit too and let auto respawn the whole
+	// tree, which gets a fresh macOS Local Network grant. See CLAUDE.md.
+	exitRestartTree = 75
 )
 
 // pollStalled reports whether the polling loop has gone silent for too long.
@@ -55,26 +68,32 @@ func runWatchdog(app *ui.App, started time.Time, sleep func(time.Duration), exit
 
 		last := app.LastRefresh()
 		if pollStalled(last, now, started, watchdogStall) {
-			log.Printf("watchdog: poll loop stalled (last refresh %s) — exiting for relaunch",
+			log.Printf("watchdog: poll loop stalled (last refresh %s) — restarting GUI",
 				sinceDesc(last, started))
-			exit(70)
+			exit(exitRestartGUI)
 			return
 		}
 
-		if since := app.NoRouteSince(); routeWedged(since, now, noRouteRestart) {
-			log.Printf("watchdog: %s of \"no route to host\" — exiting so a fresh process can re-route",
+		since := app.NoRouteSince()
+		if routeWedged(since, app.LastSuccess(), now, noRouteRestart) {
+			log.Printf("watchdog: %s of \"no route to host\" after a working connection — restarting process tree for a fresh network grant",
 				now.Sub(since).Round(time.Second))
-			exit(70)
+			exit(exitRestartTree)
 			return
 		}
 	}
 }
 
-// routeWedged reports whether the process has been stuck on routing-level dial
-// failures long enough that only a restart will recover it. A zero noRouteSince
-// means the last poll was not a routing failure, so we are not wedged.
-func routeWedged(noRouteSince, now time.Time, threshold time.Duration) bool {
-	if noRouteSince.IsZero() {
+// routeWedged reports whether the process is stuck on routing-level dial failures
+// long enough that only a fresh process tree will recover it.
+//
+// It requires a PRIOR successful poll (lastSuccess set): the failure mode we heal
+// is "was connected, then macOS revoked LAN access / the route flapped". If the
+// process never connected (genuine spark outage, or a denial with no grace), a
+// restart would not help, so we stay put and just show "down" rather than
+// restart-loop.
+func routeWedged(noRouteSince, lastSuccess, now time.Time, threshold time.Duration) bool {
+	if noRouteSince.IsZero() || lastSuccess.IsZero() {
 		return false
 	}
 	return now.Sub(noRouteSince) > threshold

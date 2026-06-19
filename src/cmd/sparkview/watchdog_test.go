@@ -40,34 +40,40 @@ func TestPollStalled(t *testing.T) {
 }
 
 // TestRouteWedged verifies the no-route restart fires only after a sustained
-// routing-failure streak, never when there is no streak.
+// routing-failure streak that followed a prior successful connection.
 func TestRouteWedged(t *testing.T) {
 	base := time.Now()
+	prior := base.Add(-time.Hour) // a prior success exists
 	tests := []struct {
 		name         string
 		noRouteSince time.Time
+		lastSuccess  time.Time
 		now          time.Time
 		want         bool
 	}{
-		{"no streak", time.Time{}, base, false},
-		{"brief streak under threshold", base, base.Add(noRouteRestart - time.Second), false},
-		{"streak exactly at threshold", base, base.Add(noRouteRestart), false},
-		{"streak past threshold", base, base.Add(noRouteRestart + time.Second), true},
+		{"no streak", time.Time{}, prior, base, false},
+		{"streak but never connected", base, time.Time{}, base.Add(2 * noRouteRestart), false},
+		{"brief streak under threshold", base, prior, base.Add(noRouteRestart - time.Second), false},
+		{"streak exactly at threshold", base, prior, base.Add(noRouteRestart), false},
+		{"streak past threshold after success", base, prior, base.Add(noRouteRestart + time.Second), true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := routeWedged(tt.noRouteSince, tt.now, noRouteRestart); got != tt.want {
-				t.Errorf("routeWedged(%v, %v) = %v, want %v", tt.noRouteSince, tt.now, got, tt.want)
+			if got := routeWedged(tt.noRouteSince, tt.lastSuccess, tt.now, noRouteRestart); got != tt.want {
+				t.Errorf("routeWedged(%v, success=%v, %v) = %v, want %v",
+					tt.noRouteSince, tt.lastSuccess, tt.now, got, tt.want)
 			}
 		})
 	}
 }
 
-// TestRunWatchdogExitsOnNoRoute verifies a sustained no-route streak triggers a
-// restart even while the poll loop itself is healthy (lastRefresh fresh).
+// TestRunWatchdogExitsOnNoRoute verifies a sustained no-route streak (after a
+// prior success) triggers a TREE restart (exit 75), even while the poll loop
+// itself is healthy (lastRefresh fresh).
 func TestRunWatchdogExitsOnNoRoute(t *testing.T) {
 	app := &ui.App{}
 	app.SetLastRefreshForTest(time.Now())                           // poll loop alive
+	app.SetLastSuccessForTest(time.Now().Add(-time.Hour))           // had connected before
 	app.SetNoRouteSinceForTest(time.Now().Add(-2 * noRouteRestart)) // long no-route streak
 	started := time.Now().Add(-10 * time.Minute)
 
@@ -76,8 +82,27 @@ func TestRunWatchdogExitsOnNoRoute(t *testing.T) {
 		app.SetLastRefreshForTest(time.Now()) // keep poll loop "alive" each tick
 	}, func(code int) { gotCode = code })
 
-	if gotCode != 70 {
-		t.Fatalf("watchdog exit code = %d, want 70", gotCode)
+	if gotCode != exitRestartTree {
+		t.Fatalf("watchdog exit code = %d, want %d", gotCode, exitRestartTree)
+	}
+}
+
+// TestRunWatchdogNoRestartWhenNeverConnected verifies that a no-route streak with
+// NO prior success does not trigger a restart (avoids restart-looping on a real
+// outage or a zero-grace denial). The loop must instead trip the poll-stall path.
+func TestRunWatchdogNeverConnectedUsesStallNotTree(t *testing.T) {
+	app := &ui.App{}
+	app.SetNoRouteSinceForTest(time.Now().Add(-2 * noRouteRestart)) // long no-route streak
+	// lastSuccess stays zero (never connected); lastRefresh stays zero too, so the
+	// poll-stall path is what should fire — as a GUI restart, not a tree restart.
+	started := time.Now().Add(-10 * time.Minute)
+
+	gotCode := -1
+	runWatchdog(app, started, func(time.Duration) {}, func(code int) { gotCode = code })
+
+	if gotCode != exitRestartGUI {
+		t.Fatalf("never-connected no-route should fall through to poll-stall GUI restart (%d), got %d",
+			exitRestartGUI, gotCode)
 	}
 }
 

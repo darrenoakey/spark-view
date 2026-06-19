@@ -168,6 +168,47 @@ func TestLauncherSurvivesMissingBinary(t *testing.T) {
 	}
 }
 
+// TestLauncherStopsOnRestartTreeCode verifies that when the GUI exits with the
+// special "restart the whole tree" code (75), the launcher itself exits (so the
+// process manager respawns a fresh launcher with a fresh macOS Local Network
+// grant) rather than relaunching the GUI under the same launcher.
+func TestLauncherStopsOnRestartTreeCode(t *testing.T) {
+	dir := t.TempDir()
+	counter := filepath.Join(dir, "runs.txt")
+	bin := writeFakeBinary(t, dir, counter, 75) // GUI asks for a tree restart
+
+	cmd := exec.Command(launcherPath(t))
+	cmd.Env = append(os.Environ(),
+		"SPARKVIEW_BIN="+bin,
+		"SPARKVIEW_RELAUNCH_DELAY=0.2",
+	)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start launcher: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		_, _ = cmd.Process.Wait()
+	})
+
+	// The launcher should exit promptly (cleanly) after the single run.
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("launcher should exit 0 on code 75, got: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("launcher did not exit after GUI returned code 75")
+	}
+
+	// And it must NOT have relaunched the GUI — exactly one run.
+	if got := countRuns(t, counter); got != 1 {
+		t.Fatalf("expected exactly 1 GUI run before tree-restart exit, got %d", got)
+	}
+}
+
 // TestLauncherTerminatesOnSigterm verifies the launcher exits promptly on SIGTERM
 // (so `auto stop` shuts it down cleanly rather than the manager having to SIGKILL).
 func TestLauncherTerminatesOnSigterm(t *testing.T) {
