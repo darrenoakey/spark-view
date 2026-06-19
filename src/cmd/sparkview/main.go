@@ -51,8 +51,6 @@ func run() error {
 	log.Printf("App Nap disabled; polling %s every %s (interval from end of previous poll)",
 		arbiter.DefaultURL, pollInterval)
 
-	started := time.Now()
-
 	go func() {
 		win := persist.NewWindow("sparkview", app.Title("Spark View"))
 
@@ -62,11 +60,6 @@ func run() error {
 		// All network I/O (polling here, and the right-click write actions in the
 		// ui package) happens on background goroutines so the UI never blocks.
 		go runPoller(dashboard, pollInterval)
-
-		// Self-heal: if the poll loop ever wedges, exit so the supervising
-		// launcher respawns a fresh GUI. Keys off poll liveness, not rendering,
-		// so a merely occluded/idle window is never restarted.
-		go runWatchdog(dashboard, started, time.Sleep, os.Exit)
 
 		var ops op.Ops
 		var iconOnce sync.Once

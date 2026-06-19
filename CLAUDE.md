@@ -28,7 +28,7 @@ GPU inference dashboard for the Arbiter server on spark (10.0.0.254:8400).
 The app logs to **stderr** (Go `log`, microsecond timestamps, `sparkview` prefix):
 startup/pid, App Nap disabled, poll connect/disconnect/reconnect transitions
 (NOT every poll — transitions only), right-click write actions and their
-failures, watchdog restarts, and window close. `auto` captures stderr into a
+failures, and window close. `auto` captures stderr into a
 timestamped per-launch file under
 `~/local/auto/output/logs/sparkview/YYYY/MM/sparkview_*.log`. Use `./run logs`
 to tail the most recent one; it is the place to look first when diagnosing a
@@ -67,25 +67,25 @@ window sat in the background, macOS throttled the process — the 3s poll loop
 stopped firing, and because an occluded window is never redrawn, the last frame
 ("server down") lingered. It looked dead while still running.
 
-Two defenses, both in `cmd/sparkview`:
-- **App Nap is disabled** at startup via an `NSProcessInfo` activity assertion
-  (`appnap_darwin.go`, `NSActivityUserInitiatedAllowingIdleSystemSleep`, token
-  retained for process life). The poll loop now keeps running while backgrounded,
-  so the in-memory state stays fresh and the window draws current data the moment
-  it is revealed.
-- **A poll-liveness watchdog** (`watchdog.go`) exits the process (→ launcher
-  respawns) if no poll cycle has completed for 60s. It keys off `App.LastRefresh()`
-  — POLL liveness, NOT frame/render liveness — because an occluded or unfocused
-  window legitimately stops drawing; a frame-based watchdog would restart-loop
-  whenever the window is in the background.
+Defense: **App Nap is disabled** two ways — `LSAppNapIsDisabled` in the bundle
+`Info.plist`, and at startup via an `NSProcessInfo` activity assertion
+(`appnap_darwin.go`, `NSActivityUserInitiatedAllowingIdleSystemSleep`, token
+retained for process life). The poll loop keeps running while backgrounded, so the
+in-memory state stays fresh and the window draws current data the moment it is
+revealed.
+
+> There is deliberately **NO self-restart watchdog**. An earlier version exited
+> the process to "self-heal" on poll-stall / no-route; it caused visible restart
+> bouncing and was removed. The real causes are fixed at the source (App Nap
+> disabled, signed bundle for Local Network, `wifi-auto` for multi-homing), so the
+> app just runs. Supervision is only the launcher relaunching on an actual exit.
 
 ### The fifth death mode: stuck on "no route to host" (EHOSTUNREACH)
 
 A dial to spark can fail instantly with `connect: no route to host`
 (EHOSTUNREACH) — zero packets on the wire, so `curl` and fresh processes reach
-spark fine while Spark View is stuck "down", and the poll-liveness watchdog stays
-quiet (`lastRefresh` keeps advancing on the fast failures). Two distinct causes
-produce it, both only affecting a *same-subnet* host like spark:
+spark fine while Spark View is stuck "down". Two distinct causes produce it, both
+only affecting a *same-subnet* host like spark:
 
 1. **Multi-homing.** Two active interfaces on one subnet (Ethernet `en7` + Wi-Fi
    `en0`, both 10.0.0.0/24) make macOS flap the route. The `wifi-auto` daemon
@@ -101,27 +101,16 @@ produce it, both only affecting a *same-subnet* host like spark:
    **launcher** (a fresh responsible process) recovers it. (Apple-stack apps
    don't hit this — they're signed/bundled and granted once.)
 
-**The key subtlety:** recovery needs a fresh *responsible process*, i.e. a fresh
-**launcher**, NOT just a fresh GUI. Restarting only the GUI under the same
-(denied) launcher does nothing — that was a restart-loop bug.
+**Fixes (both at the source — no self-restart):**
+- Multi-homing → the `wifi-auto` daemon powers Wi-Fi off while Ethernet is up.
+- Local Network privacy → Spark View ships as a **code-signed `.app` with a stable
+  identity** (see Build & Deploy), so macOS attributes LAN access to the bundle,
+  not the launcher, and a one-time grant in System Settings → Privacy & Security →
+  Local Network persists across rebuilds (DR is constant: `codesign -d -r-
+  output/SparkView.app`).
 
-Defense (`watchdog.go` + `ui.App` + the launcher): the app classifies dial errors
-(`isNoRouteToHost` → EHOSTUNREACH/ENETUNREACH only; `refused`/timeout do not
-count, so a genuine spark outage never trips it). A streak that lasts
-> `noRouteRestart` (45s) **and follows a prior successful connection** makes the
-GUI exit with code **75**; the launcher treats 75 specially and exits too, so
-`auto` respawns the whole tree with a fresh Local Network grant. The
-prior-success gate means a never-connected process (real outage, or a denial with
-no grace) shows "down" instead of restart-looping. (A plain poll-loop wedge still
-exits 70 → GUI-only relaunch.)
-
-Permanent fix (shipped): Spark View is built as a code-signed `.app` bundle with a
-stable identity (`com.darrenoakey.sparkview` + Apple Development Team), so macOS
-attributes Local Network access to the bundle, not the launcher. The Designated
-Requirement is constant across rebuilds (verify: `codesign -d -r- output/SparkView.app`),
-so the user's ONE-TIME grant in System Settings → Privacy & Security → Local
-Network persists through code changes and cert renewals. The exit-75 tree-restart
-is the no-interaction safety net if a grant is ever lost.
+If spark ever shows "down" while `curl http://10.0.0.254:8400/v1/ps` works from
+the shell, check that Local Network grant first.
 
 ## Gio Gotchas
 

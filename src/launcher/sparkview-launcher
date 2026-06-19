@@ -32,14 +32,6 @@ set -u
 BIN="${SPARKVIEW_BIN:-/Users/darrenoakey/src/spark view/output/SparkView.app/Contents/MacOS/sparkview}"
 DELAY="${SPARKVIEW_RELAUNCH_DELAY:-2}"
 
-# Exit code by which the GUI asks for a FULL tree restart rather than a GUI-only
-# relaunch. macOS Local Network privacy ties LAN access to the responsible
-# process (this launcher); when that grant is revoked the GUI sees persistent
-# "no route to host" and a fresh GUI under the SAME launcher stays denied. On this
-# code the launcher exits so `auto` respawns a brand-new launcher tree, which gets
-# a fresh grant. See CLAUDE.md "Local Network privacy".
-RESTART_TREE_CODE=75
-
 child_pid=""
 
 # Forward termination to the child and stop supervising, so that `auto stop`
@@ -53,21 +45,17 @@ terminate() {
 }
 trap terminate TERM INT
 
-# launch_once runs the GUI once and returns its exit code (0 if the binary is
-# missing, so the caller just retries after a delay).
 launch_once() {
     if [ ! -x "$BIN" ]; then
         # Binary missing or not yet built — wait and let the caller retry rather
         # than spinning hot.
         sleep "$DELAY"
-        return 0
+        return
     fi
     "$BIN" "$@" &
     child_pid=$!
     wait "$child_pid"
-    local code=$?
     child_pid=""
-    return "$code"
 }
 
 if [ -n "${SPARKVIEW_LAUNCH_ONCE:-}" ]; then
@@ -77,11 +65,5 @@ fi
 
 while true; do
     launch_once "$@"
-    code=$?
-    if [ "$code" -eq "$RESTART_TREE_CODE" ]; then
-        # GUI requested a fresh responsible process — exit so auto respawns the
-        # whole launcher tree (and a fresh macOS Local Network grant).
-        exit 0
-    fi
     sleep "$DELAY"
 done
