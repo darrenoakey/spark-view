@@ -17,6 +17,11 @@ GPU inference dashboard for the Arbiter server on spark (10.0.0.254:8400).
 - `./run install` — (re)install the supervising launcher to `~/bin/sparkview`
 - `./run logs` — tail the live log
 - Never launch the binary directly — always use auto for process management
+- **Builds produce a code-signed `output/SparkView.app`** (stable identity:
+  bundle id `com.darrenoakey.sparkview` + Apple Development Team — see Local
+  Network privacy below). The launcher runs the executable INSIDE the bundle. The
+  loose `output/bin/sparkview` still exists for tests/dev. Signing identity is
+  auto-detected (`signing_identity` in `run`); ad-hoc fallback only warns.
 
 ## Logging
 
@@ -110,9 +115,13 @@ prior-success gate means a never-connected process (real outage, or a denial wit
 no grace) shows "down" instead of restart-looping. (A plain poll-loop wedge still
 exits 70 → GUI-only relaunch.)
 
-The proper permanent fix is to give Spark View a stable signed identity (a code-
-signed `.app` bundle with `NSLocalNetworkUsageDescription`) and grant it Local
-Network once in System Settings; the tree-restart is the no-interaction safety net.
+Permanent fix (shipped): Spark View is built as a code-signed `.app` bundle with a
+stable identity (`com.darrenoakey.sparkview` + Apple Development Team), so macOS
+attributes Local Network access to the bundle, not the launcher. The Designated
+Requirement is constant across rebuilds (verify: `codesign -d -r- output/SparkView.app`),
+so the user's ONE-TIME grant in System Settings → Privacy & Security → Local
+Network persists through code changes and cert renewals. The exit-75 tree-restart
+is the no-interaction safety net if a grant is ever lost.
 
 ## Gio Gotchas
 
