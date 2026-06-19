@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleName</key>
+	<string>Spark View</string>
+	<key>CFBundleDisplayName</key>
+	<string>Spark View</string>
+	<key>CFBundleIdentifier</key>
+	<string>com.darrenoakey.sparkview</string>
+	<key>CFBundleExecutable</key>
+	<string>sparkview</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>1.0</string>
+	<key>CFBundleVersion</key>
+	<string>1</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>13.0</string>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+	<!-- Required for macOS Local Network privacy: spark (10.0.0.254) is on the LAN. -->
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Spark View shows live GPU, VRAM, and queue status from the Arbiter server on your local network.</string>
+	<!-- Belt-and-suspenders App Nap opt-out at the bundle level (also done at runtime). -->
+	<key>LSAppNapIsDisabled</key>
+	<true/>
+	<key>LSApplicationCategoryType</key>
+	<string>public.app-category.developer-tools</string>
+</dict>
+</plist>

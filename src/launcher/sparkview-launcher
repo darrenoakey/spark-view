@@ -26,7 +26,10 @@
 
 set -u
 
-BIN="${SPARKVIEW_BIN:-/Users/darrenoakey/src/spark view/output/bin/sparkview}"
+# Run the executable INSIDE the signed .app bundle so macOS attributes Local
+# Network access to the bundle's stable code identity (not this launcher). See
+# CLAUDE.md "Local Network privacy".
+BIN="${SPARKVIEW_BIN:-/Users/darrenoakey/src/spark view/output/SparkView.app/Contents/MacOS/sparkview}"
 DELAY="${SPARKVIEW_RELAUNCH_DELAY:-2}"
 
 # Exit code by which the GUI asks for a FULL tree restart rather than a GUI-only

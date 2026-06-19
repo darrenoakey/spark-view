@@ -6,6 +6,9 @@ SRC_DIR="$SCRIPT_DIR/src"
 OUTPUT_DIR="$SCRIPT_DIR/output"
 BIN_DIR="$OUTPUT_DIR/bin"
 TEST_DIR="$OUTPUT_DIR/testing"
+APP_BUNDLE="$OUTPUT_DIR/SparkView.app"
+APP_EXE="$APP_BUNDLE/Contents/MacOS/sparkview"
+BUNDLE_ID="com.darrenoakey.sparkview"
 
 mkdir -p "$BIN_DIR" "$TEST_DIR"
 
@@ -13,7 +16,7 @@ usage() {
     echo "Usage: $0 <command> [args]"
     echo ""
     echo "Commands:"
-    echo "  build              Build all binaries to output/bin/"
+    echo "  build              Build binaries and the signed SparkView.app bundle"
     echo "  test [pkg] [args]  Run tests for a specific package"
     echo "  lint               Run gofmt, go vet, and golangci-lint"
     echo "  check              Full quality gate (lint + all tests)"
@@ -24,6 +27,24 @@ usage() {
     exit 1
 }
 
+# signing_identity finds a STABLE code-signing identity (Apple Development /
+# Developer ID for Darren Oakey). A stable identity is what makes the macOS Local
+# Network grant survive rebuilds: TCC keys on the Designated Requirement (Team ID
+# + bundle id), which is constant across builds and even cert renewals. Falls back
+# to ad-hoc ("-") with a warning — ad-hoc changes identity every build, so the
+# grant would NOT persist.
+signing_identity() {
+    local id
+    id="$( (security find-identity -v -p codesigning 2>/dev/null \
+            | grep -E "Apple Development: Darren Oakey|Developer ID Application: " \
+            | head -1 | awk '{print $2}') || true )"
+    if [ -n "$id" ]; then
+        echo "$id"
+    else
+        echo "-"
+    fi
+}
+
 cmd_build() {
     echo "==> Building..."
     cd "$SRC_DIR"
@@ -32,7 +53,29 @@ cmd_build() {
         go build -o "$BIN_DIR/$name" "./$dir"
         echo "    Built $name -> output/bin/$name"
     done
+    cmd_bundle
     echo "==> Build complete."
+}
+
+# cmd_bundle assembles output/SparkView.app around the built binary and code-signs
+# it with a stable identity + fixed bundle id, so macOS attributes Local Network
+# access to the bundle (not the launcher) and the user's one-time grant persists
+# across rebuilds. See CLAUDE.md "Local Network privacy".
+cmd_bundle() {
+    local id; id="$(signing_identity)"
+    echo "==> Bundling SparkView.app (sign id: $id)"
+    rm -rf "$APP_BUNDLE"
+    mkdir -p "$APP_BUNDLE/Contents/MacOS" "$APP_BUNDLE/Contents/Resources"
+    cp "$BIN_DIR/sparkview" "$APP_EXE"
+    cp "$SRC_DIR/cmd/sparkview/bundle/Info.plist" "$APP_BUNDLE/Contents/Info.plist"
+    if [ "$id" = "-" ]; then
+        echo "    WARNING: no stable signing identity found; ad-hoc signing — the"
+        echo "             Local Network grant will NOT persist across rebuilds."
+    fi
+    codesign --force --options runtime --identifier "$BUNDLE_ID" \
+        --sign "$id" "$APP_BUNDLE" 2>&1 | sed 's/^/    /'
+    echo "    Bundled -> output/SparkView.app"
+    codesign -dv "$APP_BUNDLE" 2>&1 | grep -E "Identifier|TeamIdentifier|Authority=Apple Development|Authority=Developer ID" | sed 's/^/    /' || true
 }
 
 cmd_test() {
@@ -94,8 +137,8 @@ cmd_check() {
 
 cmd_run() {
     cmd_build
-    echo "==> Running..."
-    exec "$BIN_DIR/sparkview" "$@"
+    echo "==> Running (signed bundle)..."
+    exec "$APP_EXE" "$@"
 }
 
 cmd_install() {
