@@ -41,6 +41,27 @@ If the launcher itself is loaded but the watch agent is not, restarts still happ
 at the GUI level but not for the launcher process / reboots — verify with
 `launchctl list | grep darrenoakey.auto`.
 
+### The fourth death mode: alive-but-frozen (App Nap)
+
+The launcher only relaunches on *exit*. A process that is alive but has stopped
+updating slips past it. This is what App Nap caused: Spark View ships as a bare
+Mach-O (no `.app`/Info.plist), so it has no `LSAppNapIsDisabled` key. When its
+window sat in the background, macOS throttled the process — the 3s poll loop
+stopped firing, and because an occluded window is never redrawn, the last frame
+("server down") lingered. It looked dead while still running.
+
+Two defenses, both in `cmd/sparkview`:
+- **App Nap is disabled** at startup via an `NSProcessInfo` activity assertion
+  (`appnap_darwin.go`, `NSActivityUserInitiatedAllowingIdleSystemSleep`, token
+  retained for process life). The poll loop now keeps running while backgrounded,
+  so the in-memory state stays fresh and the window draws current data the moment
+  it is revealed.
+- **A poll-liveness watchdog** (`watchdog.go`) exits the process (→ launcher
+  respawns) if no poll cycle has completed for 60s. It keys off `App.LastRefresh()`
+  — POLL liveness, NOT frame/render liveness — because an occluded or unfocused
+  window legitimately stops drawing; a frame-based watchdog would restart-loop
+  whenever the window is in the background.
+
 ## Gio Gotchas
 
 - `app.Main()` MUST stay on main goroutine; event loop in goroutine

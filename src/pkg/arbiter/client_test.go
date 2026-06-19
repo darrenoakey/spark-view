@@ -56,7 +56,7 @@ func TestPS(t *testing.T) {
 
 	server := &http.Server{Handler: mux}
 	go func() { _ = server.Serve(listener) }()
-	t.Cleanup(func() { server.Close() })
+	t.Cleanup(func() { _ = server.Close() })
 
 	client := NewClient("http://" + listener.Addr().String())
 	status, err := client.PS()
@@ -123,7 +123,7 @@ func TestPSError(t *testing.T) {
 
 	server := &http.Server{Handler: mux}
 	go func() { _ = server.Serve(listener) }()
-	t.Cleanup(func() { server.Close() })
+	t.Cleanup(func() { _ = server.Close() })
 
 	client := NewClient("http://" + listener.Addr().String())
 	_, err = client.PS()
@@ -157,7 +157,7 @@ func TestPatchModel(t *testing.T) {
 
 	server := &http.Server{Handler: mux}
 	go func() { _ = server.Serve(listener) }()
-	t.Cleanup(func() { server.Close() })
+	t.Cleanup(func() { _ = server.Close() })
 
 	client := NewClient("http://" + listener.Addr().String())
 
@@ -201,7 +201,7 @@ func TestPatchModelError(t *testing.T) {
 
 	server := &http.Server{Handler: mux}
 	go func() { _ = server.Serve(listener) }()
-	t.Cleanup(func() { server.Close() })
+	t.Cleanup(func() { _ = server.Close() })
 
 	client := NewClient("http://" + listener.Addr().String())
 	err = client.PatchModel("nonexistent", map[string]int{"max_instances": 3})
@@ -233,7 +233,7 @@ func TestClearJobs(t *testing.T) {
 
 	server := &http.Server{Handler: mux}
 	go func() { _ = server.Serve(listener) }()
-	t.Cleanup(func() { server.Close() })
+	t.Cleanup(func() { _ = server.Close() })
 
 	client := NewClient("http://" + listener.Addr().String())
 

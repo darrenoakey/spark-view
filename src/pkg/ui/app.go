@@ -117,6 +117,22 @@ func (a *App) Refresh() {
 	a.win.Invalidate()
 }
 
+// LastRefresh returns the time the most recent poll cycle completed, or the zero
+// time if none has completed yet. Safe to call from any goroutine. The watchdog
+// uses this as the liveness signal for the polling loop.
+func (a *App) LastRefresh() time.Time {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.lastRefresh
+}
+
+// SetLastRefreshForTest sets the last-refresh timestamp directly. Test-only.
+func (a *App) SetLastRefreshForTest(t time.Time) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.lastRefresh = t
+}
+
 // Layout renders the full UI frame.
 func (a *App) Layout(gtx layout.Context) layout.Dimensions {
 	paint.FillShape(gtx.Ops, bgColor, clip.Rect{Max: gtx.Constraints.Max}.Op())

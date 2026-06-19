@@ -70,7 +70,7 @@ func (c *Client) PS() (Status, error) {
 	if err != nil {
 		return Status{}, fmt.Errorf("arbiter ps request: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
@@ -102,7 +102,7 @@ func (c *Client) PatchModel(modelID string, fields map[string]int) error {
 	if err != nil {
 		return fmt.Errorf("patch model %s: %w", modelID, err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
@@ -125,7 +125,7 @@ func (c *Client) ClearJobs(modelID, scope string) error {
 	if err != nil {
 		return fmt.Errorf("clear %s for %s: %w", scope, modelID, err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)

@@ -31,6 +31,13 @@ func main() {
 func run() error {
 	client := arbiter.NewClient(arbiter.DefaultURL)
 
+	// Keep the polling loop alive when the window is backgrounded. Without this,
+	// macOS App Nap throttles the bare binary and the dashboard freezes on a
+	// stale frame. Must happen before polling starts.
+	disableAppNap()
+
+	started := time.Now()
+
 	go func() {
 		win := persist.NewWindow("sparkview", app.Title("Spark View"))
 
@@ -42,6 +49,11 @@ func run() error {
 				time.Sleep(3 * time.Second)
 			}
 		}()
+
+		// Self-heal: if the poll loop ever wedges, exit so the supervising
+		// launcher respawns a fresh GUI. Keys off poll liveness, not rendering,
+		// so a merely occluded/idle window is never restarted.
+		go runWatchdog(dashboard, started, time.Sleep, os.Exit)
 
 		var ops op.Ops
 		var iconOnce sync.Once
