@@ -2,7 +2,7 @@ package main
 
 import (
 	"fmt"
-	"os"
+	"log"
 	"time"
 
 	"sparkview/pkg/ui"
@@ -45,8 +45,7 @@ func runWatchdog(app *ui.App, started time.Time, sleep func(time.Duration), exit
 		sleep(watchdogInterval)
 		last := app.LastRefresh()
 		if pollStalled(last, time.Now(), started, watchdogStall) {
-			fmt.Fprintf(os.Stderr,
-				"watchdog: poll loop stalled (last refresh %s) — exiting for relaunch\n",
+			log.Printf("watchdog: poll loop stalled (last refresh %s) — exiting for relaunch",
 				sinceDesc(last, started))
 			exit(70)
 			return

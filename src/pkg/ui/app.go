@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"image"
 	"image/color"
+	"log"
 	"math"
 	"sync"
 	"time"
@@ -98,11 +99,14 @@ func NewApp(win *app.Window, client *arbiter.Client) *App {
 	return a
 }
 
-// Refresh fetches fresh data from the Arbiter server. Call from a goroutine.
+// Refresh fetches fresh data from the Arbiter server. Call from a goroutine
+// (never the GUI thread): it performs blocking network I/O.
 func (a *App) Refresh() {
 	status, err := a.client.PS()
 
 	a.mu.Lock()
+	wasConnected := a.connected
+	firstPoll := a.lastRefresh.IsZero()
 	if err != nil {
 		a.lastErr = err
 		a.connected = false
@@ -112,7 +116,21 @@ func (a *App) Refresh() {
 		a.connected = true
 	}
 	a.lastRefresh = time.Now()
+	nowConnected := a.connected
 	a.mu.Unlock()
+
+	// Log connection state transitions only — not every poll — so the log stays
+	// a readable record of when the link went up or down.
+	switch {
+	case firstPoll && nowConnected:
+		log.Printf("poll: connected to arbiter (%d models)", len(status.Models))
+	case firstPoll && !nowConnected:
+		log.Printf("poll: arbiter unreachable at startup: %v", err)
+	case wasConnected && !nowConnected:
+		log.Printf("poll: lost connection to arbiter: %v", err)
+	case !wasConnected && nowConnected:
+		log.Printf("poll: reconnected to arbiter (%d models)", len(status.Models))
+	}
 
 	a.win.Invalidate()
 }
@@ -181,16 +199,20 @@ func (a *App) Layout(gtx layout.Context) layout.Dimensions {
 			newMax := result.Index
 			go func() {
 				if err := a.client.PatchModel(modelID, map[string]int{"max_instances": newMax}); err != nil {
+					log.Printf("action: set %s max_instances=%d failed: %v", modelID, newMax, err)
 					return
 				}
+				log.Printf("action: set %s max_instances=%d", modelID, newMax)
 				a.Refresh()
 			}()
 		case "conc":
 			newConc := result.Index
 			go func() {
 				if err := a.client.PatchModel(modelID, map[string]int{"max_concurrent": newConc}); err != nil {
+					log.Printf("action: set %s max_concurrent=%d failed: %v", modelID, newConc, err)
 					return
 				}
+				log.Printf("action: set %s max_concurrent=%d", modelID, newConc)
 				a.Refresh()
 			}()
 		case "clear_queue":
@@ -200,8 +222,10 @@ func (a *App) Layout(gtx layout.Context) layout.Dimensions {
 			}
 			go func() {
 				if err := a.client.ClearJobs(modelID, scope); err != nil {
+					log.Printf("action: clear %s %s failed: %v", modelID, scope, err)
 					return
 				}
+				log.Printf("action: clear %s %s", modelID, scope)
 				a.Refresh()
 			}()
 		}

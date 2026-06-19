@@ -20,6 +20,7 @@ usage() {
     echo "  run [args]         Build and run the main binary"
     echo "  install            Install the supervising launcher to ~/bin/sparkview"
     echo "  rebuild            Build, install launcher, and restart via auto"
+    echo "  logs               Tail the live Spark View log (auto-captured)"
     exit 1
 }
 
@@ -117,6 +118,28 @@ cmd_rebuild() {
     ~/local/auto/run -q restart sparkview
 }
 
+cmd_logs() {
+    # Spark View logs to stderr (startup, App Nap, poll connect/disconnect
+    # transitions, right-click actions, watchdog restarts); `auto` captures that
+    # into a timestamped per-launch file. Tail the most recent one.
+    # `|| true` guards: under `set -euo pipefail` a SIGPIPE from `head` closing
+    # early, or a non-zero `find`, would otherwise abort the script silently.
+    local logdir
+    logdir="$( (find "$HOME/local/auto/output/logs/sparkview" -type d -name '[0-9][0-9]' 2>/dev/null | sort | tail -1) || true )"
+    if [ -z "$logdir" ]; then
+        echo "No Spark View logs found under ~/local/auto/output/logs/sparkview" >&2
+        exit 1
+    fi
+    local latest
+    latest="$( (ls -t "$logdir"/sparkview_*.log 2>/dev/null | head -1) || true )"
+    if [ -z "$latest" ]; then
+        echo "No log files in $logdir" >&2
+        exit 1
+    fi
+    echo "==> Tailing $latest (Ctrl-C to stop)"
+    tail -n 50 -f "$latest"
+}
+
 case "${1:-}" in
     build) shift; cmd_build "$@" ;;
     test)  shift; cmd_test "$@" ;;
@@ -125,5 +148,6 @@ case "${1:-}" in
     run)     shift; cmd_run "$@" ;;
     install) shift; cmd_install "$@" ;;
     rebuild) shift; cmd_rebuild "$@" ;;
+    logs)    shift; cmd_logs "$@" ;;
     *)       usage ;;
 esac

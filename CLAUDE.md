@@ -15,7 +15,19 @@ GPU inference dashboard for the Arbiter server on spark (10.0.0.254:8400).
 
 - `./run rebuild` — build, install the launcher, and restart via auto (the ONLY way to deploy changes)
 - `./run install` — (re)install the supervising launcher to `~/bin/sparkview`
+- `./run logs` — tail the live log
 - Never launch the binary directly — always use auto for process management
+
+## Logging
+
+The app logs to **stderr** (Go `log`, microsecond timestamps, `sparkview` prefix):
+startup/pid, App Nap disabled, poll connect/disconnect/reconnect transitions
+(NOT every poll — transitions only), right-click write actions and their
+failures, watchdog restarts, and window close. `auto` captures stderr into a
+timestamped per-launch file under
+`~/local/auto/output/logs/sparkview/YYYY/MM/sparkview_*.log`. Use `./run logs`
+to tail the most recent one; it is the place to look first when diagnosing a
+freeze or a "server down" report.
 
 ## Supervision (why it never dies)
 
@@ -28,7 +40,7 @@ Spark View alive:
 2. **The launcher** relaunches the GUI binary (`output/bin/sparkview`) on EVERY
    exit after a short delay.
 
-This defeats the three historical death modes seen in `output/logs/sparkview/`:
+This defeats the three historical death modes seen in the logs (see Logging below):
 - `Resource deadlock avoided` (EDEADLK) re-execing the Mach-O — a shell script
   never EDEADLKs, and it only relaunches the GUI *after* the prior instance has
   fully exited, so the overlapping-image race cannot occur.

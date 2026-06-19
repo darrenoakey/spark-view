@@ -2,12 +2,13 @@
 package main
 
 import (
-	_ "embed"
-	"fmt"
+	"log"
 	"os"
 	"runtime"
 	"sync"
 	"time"
+
+	_ "embed"
 
 	"sparkview/pkg/arbiter"
 	"sparkview/pkg/ui"
@@ -21,20 +22,34 @@ import (
 //go:embed gui/icon.png
 var dockIconBytes []byte
 
+// pollInterval is the gap BETWEEN polls. The poller sleeps this long after each
+// fetch completes (see runPoller), so the interval is measured from the end of
+// the previous poll — a slow or timed-out fetch never overlaps the next one.
+const pollInterval = 3 * time.Second
+
 func main() {
+	// Timestamped lines to stderr; `auto` captures this into
+	// ~/local/auto/output/logs/sparkview/. Microseconds help correlate the
+	// poll loop with the watchdog. (`./run logs` tails the live file.)
+	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
+	log.SetPrefix("sparkview ")
+
 	if err := run(); err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
+		log.Fatalf("fatal: %v", err)
 	}
 }
 
 func run() error {
+	log.Printf("starting (pid %d)", os.Getpid())
+
 	client := arbiter.NewClient(arbiter.DefaultURL)
 
 	// Keep the polling loop alive when the window is backgrounded. Without this,
 	// macOS App Nap throttles the bare binary and the dashboard freezes on a
 	// stale frame. Must happen before polling starts.
 	disableAppNap()
+	log.Printf("App Nap disabled; polling %s every %s (interval from end of previous poll)",
+		arbiter.DefaultURL, pollInterval)
 
 	started := time.Now()
 
@@ -43,12 +58,10 @@ func run() error {
 
 		dashboard := ui.NewApp(win.Window, client)
 
-		go func() {
-			for {
-				dashboard.Refresh()
-				time.Sleep(3 * time.Second)
-			}
-		}()
+		// Poll OFF the GUI thread: the GUI goroutine below only ever runs Layout.
+		// All network I/O (polling here, and the right-click write actions in the
+		// ui package) happens on background goroutines so the UI never blocks.
+		go runPoller(dashboard, pollInterval)
 
 		// Self-heal: if the poll loop ever wedges, exit so the supervising
 		// launcher respawns a fresh GUI. Keys off poll liveness, not rendering,
@@ -62,7 +75,9 @@ func run() error {
 			case app.DestroyEvent:
 				win.Close()
 				if e.Err != nil {
-					fmt.Fprintf(os.Stderr, "error: %v\n", e.Err)
+					log.Printf("window destroyed with error: %v", e.Err)
+				} else {
+					log.Printf("window closed; exiting (launcher will relaunch)")
 				}
 				os.Exit(0)
 			case app.FrameEvent:
@@ -78,4 +93,15 @@ func run() error {
 
 	runtime.KeepAlive(client)
 	return nil
+}
+
+// runPoller refreshes the dashboard forever. It runs on its OWN goroutine, never
+// the GUI thread, and sleeps `interval` AFTER each poll returns — so the cadence
+// is measured from the end of the previous poll and a slow/timed-out fetch can
+// never overlap the next request or hammer the server.
+func runPoller(dashboard *ui.App, interval time.Duration) {
+	for {
+		dashboard.Refresh()
+		time.Sleep(interval)
+	}
 }
