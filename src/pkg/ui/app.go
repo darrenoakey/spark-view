@@ -2,12 +2,14 @@
 package ui
 
 import (
+	"errors"
 	"fmt"
 	"image"
 	"image/color"
 	"log"
 	"math"
 	"sync"
+	"syscall"
 	"time"
 
 	"sparkview/pkg/arbiter"
@@ -73,9 +75,15 @@ type App struct {
 
 	mu          sync.Mutex
 	status      arbiter.Status
-	lastRefresh time.Time
+	lastRefresh time.Time // end of the most recent poll (success or failure)
 	lastErr     error
 	connected   bool
+	// noRouteSince is when the current unbroken streak of "no route to
+	// host"/"network unreachable" errors began (zero if not in such a streak).
+	// macOS multi-homing on one subnet can wedge a long-lived process into
+	// returning EHOSTUNREACH on every dial even after the route recovers; the
+	// watchdog uses this to restart out of that state. See watchdog.go.
+	noRouteSince time.Time
 
 	list      widget.List
 	maxTags   []bool // pointer tags for max-instances column right-click
@@ -104,18 +112,31 @@ func NewApp(win *app.Window, client *arbiter.Client) *App {
 func (a *App) Refresh() {
 	status, err := a.client.PS()
 
+	now := time.Now()
+
 	a.mu.Lock()
 	wasConnected := a.connected
 	firstPoll := a.lastRefresh.IsZero()
 	if err != nil {
 		a.lastErr = err
 		a.connected = false
+		// Track only the unrecoverable routing failure. A "connection
+		// refused"/timeout means the route is fine and spark is just down or
+		// slow — the app recovers from those on its own, so clear the streak.
+		if isNoRouteToHost(err) {
+			if a.noRouteSince.IsZero() {
+				a.noRouteSince = now
+			}
+		} else {
+			a.noRouteSince = time.Time{}
+		}
 	} else {
 		a.status = status
 		a.lastErr = nil
 		a.connected = true
+		a.noRouteSince = time.Time{}
 	}
-	a.lastRefresh = time.Now()
+	a.lastRefresh = now
 	nowConnected := a.connected
 	a.mu.Unlock()
 
@@ -149,6 +170,31 @@ func (a *App) SetLastRefreshForTest(t time.Time) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.lastRefresh = t
+}
+
+// NoRouteSince returns when the current unbroken streak of "no route to host"
+// errors began, or the zero time if the last poll was not such a failure. Safe
+// to call from any goroutine. The watchdog uses this to restart out of the macOS
+// multi-homing wedge (see watchdog.go).
+func (a *App) NoRouteSince() time.Time {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.noRouteSince
+}
+
+// SetNoRouteSinceForTest sets the no-route streak start directly. Test-only.
+func (a *App) SetNoRouteSinceForTest(t time.Time) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.noRouteSince = t
+}
+
+// isNoRouteToHost reports whether err is a routing-level failure — "no route to
+// host" (EHOSTUNREACH) or "network is unreachable" (ENETUNREACH) — as opposed to
+// the server being down (ECONNREFUSED) or slow (timeout). Only the routing case
+// wedges a long-lived process on macOS, so only it warrants a restart.
+func isNoRouteToHost(err error) bool {
+	return errors.Is(err, syscall.EHOSTUNREACH) || errors.Is(err, syscall.ENETUNREACH)
 }
 
 // Layout renders the full UI frame.

@@ -74,6 +74,30 @@ Two defenses, both in `cmd/sparkview`:
   window legitimately stops drawing; a frame-based watchdog would restart-loop
   whenever the window is in the background.
 
+### The fifth death mode: stuck on "no route to host" (multi-homing)
+
+If this Mac has **two active interfaces on the same subnet** (e.g. Ethernet
+`en7` and Wi-Fi `en0` both on 10.0.0.0/24), the route to spark flaps and a dial
+can return `connect: no route to host` (EHOSTUNREACH). The nasty part: once a
+**long-lived Go process** hits EHOSTUNREACH for a same-subnet host, it keeps
+returning it on every dial *even after the route recovers* — failing instantly
+with no packets on the wire (so `curl` from the shell works while Spark View is
+stuck "down", and the poll-liveness watchdog stays quiet because `lastRefresh`
+keeps advancing on the fast failures). A *fresh* process re-evaluates routing and
+connects fine. (Apple-stack apps using NSURLSession don't hit this — CFNetwork
+resets on network-change notifications; Go's `net/http` raw sockets do not. Only
+Spark View is exposed because it continuously polls a *same-subnet* host.)
+
+Defense (`watchdog.go` + `ui.App`): the app classifies dial errors. Only routing
+failures (EHOSTUNREACH/ENETUNREACH, via `isNoRouteToHost`) start a `noRouteSince`
+streak; `connection refused`/timeout do NOT (the app recovers from those itself).
+If the routing streak lasts > `noRouteRestart` (45s), the watchdog exits so the
+launcher respawns a process that can re-route. Because refused/timeout never
+trip it, a genuine spark outage does **not** cause a restart loop.
+
+The real fix is the network: don't run two interfaces on one subnet (prefer
+Ethernet when plugged, Wi-Fi when not). The app-side restart is a safety net.
+
 ## Gio Gotchas
 
 - `app.Main()` MUST stay on main goroutine; event loop in goroutine

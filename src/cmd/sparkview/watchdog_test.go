@@ -39,6 +39,48 @@ func TestPollStalled(t *testing.T) {
 	}
 }
 
+// TestRouteWedged verifies the no-route restart fires only after a sustained
+// routing-failure streak, never when there is no streak.
+func TestRouteWedged(t *testing.T) {
+	base := time.Now()
+	tests := []struct {
+		name         string
+		noRouteSince time.Time
+		now          time.Time
+		want         bool
+	}{
+		{"no streak", time.Time{}, base, false},
+		{"brief streak under threshold", base, base.Add(noRouteRestart - time.Second), false},
+		{"streak exactly at threshold", base, base.Add(noRouteRestart), false},
+		{"streak past threshold", base, base.Add(noRouteRestart + time.Second), true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := routeWedged(tt.noRouteSince, tt.now, noRouteRestart); got != tt.want {
+				t.Errorf("routeWedged(%v, %v) = %v, want %v", tt.noRouteSince, tt.now, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestRunWatchdogExitsOnNoRoute verifies a sustained no-route streak triggers a
+// restart even while the poll loop itself is healthy (lastRefresh fresh).
+func TestRunWatchdogExitsOnNoRoute(t *testing.T) {
+	app := &ui.App{}
+	app.SetLastRefreshForTest(time.Now())                           // poll loop alive
+	app.SetNoRouteSinceForTest(time.Now().Add(-2 * noRouteRestart)) // long no-route streak
+	started := time.Now().Add(-10 * time.Minute)
+
+	gotCode := -1
+	runWatchdog(app, started, func(time.Duration) {
+		app.SetLastRefreshForTest(time.Now()) // keep poll loop "alive" each tick
+	}, func(code int) { gotCode = code })
+
+	if gotCode != 70 {
+		t.Fatalf("watchdog exit code = %d, want 70", gotCode)
+	}
+}
+
 // TestRunWatchdogExitsOnStall verifies runWatchdog calls exit when the poll loop
 // is wedged, and supplies the right code.
 func TestRunWatchdogExitsOnStall(t *testing.T) {
