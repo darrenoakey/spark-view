@@ -70,7 +70,7 @@ func run() error {
 				if e.Err != nil {
 					log.Printf("window destroyed with error: %v", e.Err)
 				} else {
-					log.Printf("window closed; exiting (launcher will relaunch)")
+					log.Printf("window closed; exiting (LaunchAgent will relaunch)")
 				}
 				os.Exit(0)
 			case app.FrameEvent:

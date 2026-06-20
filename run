@@ -21,9 +21,9 @@ usage() {
     echo "  lint               Run gofmt, go vet, and golangci-lint"
     echo "  check              Full quality gate (lint + all tests)"
     echo "  run [args]         Build and run the main binary"
-    echo "  install            Install the supervising launcher to ~/bin/sparkview"
-    echo "  rebuild            Build, install launcher, and restart via auto"
-    echo "  logs               Tail the live Spark View log (auto-captured)"
+    echo "  install            Install & load the Spark View LaunchAgent"
+    echo "  rebuild            Build, (re)install, and restart the LaunchAgent"
+    echo "  logs               Tail the live Spark View log"
     exit 1
 }
 
@@ -141,46 +141,52 @@ cmd_run() {
     exec "$APP_EXE" "$@"
 }
 
+LA_LABEL="com.darrenoakey.sparkview"
+LA_PLIST="$HOME/Library/LaunchAgents/$LA_LABEL.plist"
+LA_LOG="$HOME/local/auto/output/logs/sparkview/launchagent.log"
+
 cmd_install() {
-    # Install the supervising launcher as the entrypoint auto runs. The launcher
-    # (not the GUI binary) is what auto keeps alive; it relaunches the GUI on any
-    # exit — crash, Gio teardown panic, or intermittent macOS EDEADLK — so Spark
-    # View can never stay dead. See src/launcher/sparkview-launcher.
-    local launcher="$SRC_DIR/launcher/sparkview-launcher"
-    local target="$HOME/bin/sparkview"
-    echo "==> Installing launcher -> $target"
-    mkdir -p "$HOME/bin"
-    install -m 0755 "$launcher" "$target"
-    echo "    Installed."
+    # Install Spark View as its OWN LaunchAgent. launchd execs the signed .app
+    # binary directly so macOS attributes Local Network access to the bundle's
+    # stable identity (the one granted once in System Settings). NO bash launcher
+    # and NOT under auto — an intermediary becomes the "responsible process" and
+    # the Local Network grant never sticks. See CLAUDE.md "Local Network privacy".
+    echo "==> Installing LaunchAgent -> $LA_PLIST"
+    mkdir -p "$HOME/Library/LaunchAgents" "$(dirname "$LA_LOG")"
+    sed -e "s|__APP_EXE__|$APP_EXE|g" -e "s|__LOG__|$LA_LOG|g" \
+        "$SRC_DIR/launchagent/$LA_LABEL.plist.template" > "$LA_PLIST"
+    plutil -lint "$LA_PLIST" >/dev/null
+    # Retire the old auto/bash-launcher entrypoint if present.
+    if [ -e "$HOME/bin/sparkview" ]; then
+        rm -f "$HOME/bin/sparkview"
+        echo "    Removed obsolete bash launcher ~/bin/sparkview"
+    fi
+    # (Re)load the agent. Bootout returns before teardown finishes, so wait until
+    # it is really gone before bootstrap — otherwise bootstrap races and fails
+    # with "Input/output error" (5).
+    local dom="gui/$(id -u)"
+    launchctl bootout "$dom/$LA_LABEL" 2>/dev/null || true
+    local i=0
+    while launchctl print "$dom/$LA_LABEL" >/dev/null 2>&1 && [ "$i" -lt 50 ]; do
+        sleep 0.1
+        i=$((i + 1))
+    done
+    launchctl bootstrap "$dom" "$LA_PLIST"
+    echo "    Installed and loaded."
 }
 
 cmd_rebuild() {
     cmd_build
-    cmd_install
-    echo "==> Restarting via auto..."
-    ~/local/auto/run -q restart sparkview
+    cmd_install # bootout + bootstrap already restarts with the fresh binary
 }
 
 cmd_logs() {
-    # Spark View logs to stderr (startup, App Nap, poll connect/disconnect
-    # transitions, right-click actions, watchdog restarts); `auto` captures that
-    # into a timestamped per-launch file. Tail the most recent one.
-    # `|| true` guards: under `set -euo pipefail` a SIGPIPE from `head` closing
-    # early, or a non-zero `find`, would otherwise abort the script silently.
-    local logdir
-    logdir="$( (find "$HOME/local/auto/output/logs/sparkview" -type d -name '[0-9][0-9]' 2>/dev/null | sort | tail -1) || true )"
-    if [ -z "$logdir" ]; then
-        echo "No Spark View logs found under ~/local/auto/output/logs/sparkview" >&2
+    if [ ! -f "$LA_LOG" ]; then
+        echo "No Spark View log yet at $LA_LOG" >&2
         exit 1
     fi
-    local latest
-    latest="$( (ls -t "$logdir"/sparkview_*.log 2>/dev/null | head -1) || true )"
-    if [ -z "$latest" ]; then
-        echo "No log files in $logdir" >&2
-        exit 1
-    fi
-    echo "==> Tailing $latest (Ctrl-C to stop)"
-    tail -n 50 -f "$latest"
+    echo "==> Tailing $LA_LOG (Ctrl-C to stop)"
+    tail -n 50 -f "$LA_LOG"
 }
 
 case "${1:-}" in
