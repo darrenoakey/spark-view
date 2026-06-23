@@ -60,6 +60,13 @@ var (
 
 	dotLoaded   = color.NRGBA{R: 0x00, G: 0xe6, B: 0x96, A: 0xff}
 	dotUnloaded = color.NRGBA{R: 0x44, G: 0x44, B: 0x55, A: 0xff}
+
+	// Host badge colors — a remote (off-spark) host must stand out brightly so
+	// it is obvious a model is executing on another box; a local/spark host is muted.
+	badgeRemoteBG   = color.NRGBA{R: 0x00, G: 0x3a, B: 0x46, A: 0xff} // cyan-tinted dark fill
+	badgeRemoteText = accentCyan
+	badgeLocalBG    = color.NRGBA{R: 0x22, G: 0x22, B: 0x2c, A: 0xff}
+	badgeLocalText  = textSecondary
 )
 
 // Column widths: Model (flexed), State, Max, Conc, VRAM, Active, Queued
@@ -412,26 +419,34 @@ func (a *App) layoutRow(gtx layout.Context, m arbiter.Model, index int) layout.D
 		{queuedText, gtx.Dp(colWidths[colQueued]), text.End, queuedColor, false},
 	}
 
+	hosts := runningHosts(m)
+
 	x := 0
 	for colIdx, col := range columns {
 		offset := op.Offset(image.Pt(x, 0)).Push(gtx.Ops)
 		gtxCol := gtx
 		gtxCol.Constraints = layout.Exact(image.Pt(col.width, rowH))
 
-		layout.Inset{
-			Left: unit.Dp(16), Right: unit.Dp(16),
-			Top: unit.Dp(10),
-		}.Layout(gtxCol, func(gtx layout.Context) layout.Dimensions {
-			l := material.Body2(a.theme, col.val)
-			l.Color = col.color
-			l.TextSize = unit.Sp(12)
-			l.Alignment = col.align
-			if col.bold {
-				l.Font.Weight = font.Medium
-			}
-			l.MaxLines = 1
-			return l.Layout(gtx)
-		})
+		if colIdx == 0 {
+			// Model-name cell: truncated name (flexed) + host badge(s) (rigid),
+			// so off-spark execution is visible without overflowing the column.
+			a.layoutNameCell(gtxCol, col.val, col.color, hosts)
+		} else {
+			layout.Inset{
+				Left: unit.Dp(16), Right: unit.Dp(16),
+				Top: unit.Dp(10),
+			}.Layout(gtxCol, func(gtx layout.Context) layout.Dimensions {
+				l := material.Body2(a.theme, col.val)
+				l.Color = col.color
+				l.TextSize = unit.Sp(12)
+				l.Alignment = col.align
+				if col.bold {
+					l.Font.Weight = font.Medium
+				}
+				l.MaxLines = 1
+				return l.Layout(gtx)
+			})
+		}
 
 		// Right-click areas on interactive columns
 		a.layoutColumnClickArea(gtx, m, index, colIdx, col.width, rowH)
@@ -448,6 +463,113 @@ func (a *App) layoutRow(gtx layout.Context, m arbiter.Model, index int) layout.D
 	sepOff.Pop()
 
 	return layout.Dimensions{Size: image.Pt(totalW, rowH)}
+}
+
+// hostBadge identifies one running host for a model's name-cell badge.
+type hostBadge struct {
+	host   string
+	remote bool
+}
+
+// runningHosts returns the host(s) a model is actually executing on. An
+// instance counts as "running" if it is loaded/active or has active jobs. If no
+// instance is loaded but the model itself is loaded/active, the first such
+// instance is used as a fallback. Stopped/unloaded models return nil (no badge).
+func runningHosts(m arbiter.Model) []hostBadge {
+	var badges []hostBadge
+	for _, inst := range m.Instances {
+		if inst.State == "loaded" || inst.State == "active" || inst.ActiveJobs > 0 {
+			badges = append(badges, hostBadge{host: inst.Host, remote: inst.Remote})
+		}
+	}
+	if len(badges) > 0 {
+		return badges
+	}
+	// Fallback: model is loaded/active but no instance reports it (or instances
+	// are absent) — badge the first instance if we have one.
+	if m.State == "loaded" || m.State == "active" {
+		if len(m.Instances) > 0 {
+			i := m.Instances[0]
+			return []hostBadge{{host: i.Host, remote: i.Remote}}
+		}
+	}
+	return nil
+}
+
+// layoutNameCell renders the model name (truncated to one line, flexed) followed
+// by any running-host badges (rigid, right-aligned within the cell).
+func (a *App) layoutNameCell(gtx layout.Context, name string, nameColor color.NRGBA, hosts []hostBadge) layout.Dimensions {
+	return layout.Inset{
+		Left: unit.Dp(16), Right: unit.Dp(16),
+		Top: unit.Dp(7),
+	}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		return layout.Flex{Axis: layout.Horizontal, Alignment: layout.Middle}.Layout(gtx,
+			layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
+				return layout.Inset{Top: unit.Dp(3)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+					l := material.Body2(a.theme, name)
+					l.Color = nameColor
+					l.TextSize = unit.Sp(12)
+					l.Font.Weight = font.Medium
+					l.MaxLines = 1
+					return l.Layout(gtx)
+				})
+			}),
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+				return layout.Flex{Axis: layout.Horizontal, Alignment: layout.Middle}.Layout(gtx,
+					rigidBadges(a, hosts)...,
+				)
+			}),
+		)
+	})
+}
+
+// rigidBadges builds one rigid flex child per host badge, spaced left.
+func rigidBadges(a *App, hosts []hostBadge) []layout.FlexChild {
+	children := make([]layout.FlexChild, 0, len(hosts))
+	for _, h := range hosts {
+		h := h
+		children = append(children, layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			return layout.Inset{Left: unit.Dp(6)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+				return a.layoutHostBadge(gtx, h.host, h.remote)
+			})
+		}))
+	}
+	return children
+}
+
+// layoutHostBadge draws a small rounded pill with the host name. Remote hosts
+// use a bright cyan-tinted pill so off-spark execution stands out; local/spark
+// hosts use a muted pill.
+func (a *App) layoutHostBadge(gtx layout.Context, host string, remote bool) layout.Dimensions {
+	bg, fg := badgeLocalBG, badgeLocalText
+	if remote {
+		bg, fg = badgeRemoteBG, badgeRemoteText
+	}
+
+	// Macro the label so we can size the pill background to it.
+	macro := op.Record(gtx.Ops)
+	labelDims := layout.Inset{
+		Left: unit.Dp(6), Right: unit.Dp(6),
+		Top: unit.Dp(2), Bottom: unit.Dp(2),
+	}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		l := material.Body2(a.theme, host)
+		l.Color = fg
+		l.TextSize = unit.Sp(10)
+		l.Font.Weight = font.Medium
+		l.MaxLines = 1
+		return l.Layout(gtx)
+	})
+	call := macro.Stop()
+
+	radius := labelDims.Size.Y / 2
+	pill := clip.RRect{
+		Rect: image.Rectangle{Max: labelDims.Size},
+		NE:   radius, NW: radius, SE: radius, SW: radius,
+	}
+	paint.FillShape(gtx.Ops, bg, pill.Op(gtx.Ops))
+	call.Add(gtx.Ops)
+
+	return labelDims
 }
 
 // layoutColumnClickArea registers right-click event areas on interactive columns.
@@ -594,6 +716,10 @@ func (a *App) layoutStatusBar(gtx layout.Context, status arbiter.Status, connect
 					}),
 				)
 			}),
+			// Middle: remote-hosts fleet indicator (nothing if no remote hosts)
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+				return a.layoutRemoteHosts(gtx, status.RemoteHosts)
+			}),
 			// Right side: queue stats
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 				return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
@@ -664,6 +790,52 @@ func (a *App) layoutStatusStat(gtx layout.Context, label string, count int, clr 
 			})
 		}),
 	)
+}
+
+// layoutRemoteHosts renders a compact at-a-glance fleet view: one small dot per
+// remote host (green if reachable, red if not) followed by its host_id label.
+// Renders nothing when there are no remote hosts.
+func (a *App) layoutRemoteHosts(gtx layout.Context, hosts []arbiter.RemoteHost) layout.Dimensions {
+	if len(hosts) == 0 {
+		return layout.Dimensions{}
+	}
+
+	children := make([]layout.FlexChild, 0, len(hosts))
+	for i, h := range hosts {
+		h := h
+		first := i == 0
+		children = append(children, layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			inset := layout.Inset{Left: unit.Dp(14)}
+			if first {
+				inset.Left = 0
+			}
+			return inset.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+				return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+						dotSize := gtx.Dp(unit.Dp(6))
+						dotColor := accentRed
+						if h.Reachable {
+							dotColor = dotLoaded
+						}
+						r := clip.Ellipse{Max: image.Pt(dotSize, dotSize)}.Op(gtx.Ops)
+						paint.FillShape(gtx.Ops, dotColor, r)
+						return layout.Dimensions{Size: image.Pt(dotSize, dotSize)}
+					}),
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+						return layout.Inset{Left: unit.Dp(5)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+							l := material.Body2(a.theme, h.HostID)
+							l.Color = textSecondary
+							l.TextSize = unit.Sp(10)
+							l.MaxLines = 1
+							return l.Layout(gtx)
+						})
+					}),
+				)
+			})
+		}))
+	}
+
+	return layout.Flex{Alignment: layout.Middle}.Layout(gtx, children...)
 }
 
 func (a *App) layoutGaugeBar(gtx layout.Context, used, budget float64) layout.Dimensions {

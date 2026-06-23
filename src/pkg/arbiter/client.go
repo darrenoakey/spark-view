@@ -13,17 +13,31 @@ import (
 // DefaultURL is the default Arbiter server address on the spark machine.
 const DefaultURL = "http://10.0.0.254:8400"
 
+// Instance represents one placement of a model on a specific host. Arbiter is
+// multi-machine: a model can have instances on spark (local) and on remote Macs
+// (e.g. boringstack via MLX), each with its own state and job counts.
+type Instance struct {
+	Host       string `json:"host"`
+	Remote     bool   `json:"remote"`
+	State      string `json:"state"`
+	ActiveJobs int    `json:"active_jobs"`
+	InstanceID string `json:"instance_id"`
+}
+
 // Model represents a single model's status in the Arbiter system.
 type Model struct {
-	ID            string   `json:"id"`
-	State         string   `json:"state"`
-	MemoryGB      float64  `json:"memory_gb"` // allocated/configured memory
-	VRAMGB        float64  `json:"vram_gb"`   // actual VRAM usage (when loaded)
-	ActiveJobs    int      `json:"active_jobs"`
-	QueuedJobs    int      `json:"queued_jobs"`
-	IdleSeconds   *float64 `json:"idle_seconds"`
-	MaxInstances  int      `json:"max_instances"`
-	MaxConcurrent int      `json:"max_concurrent"`
+	ID              string     `json:"id"`
+	State           string     `json:"state"`
+	MemoryGB        float64    `json:"memory_gb"` // allocated/configured memory
+	VRAMGB          float64    `json:"vram_gb"`   // actual VRAM usage (when loaded)
+	ActiveJobs      int        `json:"active_jobs"`
+	QueuedJobs      int        `json:"queued_jobs"`
+	IdleSeconds     *float64   `json:"idle_seconds"`
+	MaxInstances    int        `json:"max_instances"`
+	MaxConcurrent   int        `json:"max_concurrent"`
+	Instances       []Instance `json:"instances"`
+	LoadedInstances int        `json:"loaded_instances"`
+	TotalInstances  int        `json:"total_instances"`
 }
 
 // Queue holds global job counts across all models.
@@ -35,17 +49,29 @@ type Queue struct {
 	Cancelled int `json:"cancelled"`
 }
 
+// RemoteHost describes one off-spark Arbiter execution host (a remote Mac) and
+// its reachability/capacity, as reported in the /v1/ps remote_hosts panel.
+type RemoteHost struct {
+	HostID       string   `json:"host_id"`
+	Addr         string   `json:"addr"`
+	Reachable    bool     `json:"reachable"`
+	ModelsLoaded []string `json:"models_loaded"`
+	UsedGB       float64  `json:"used_gb"`
+	BudgetGB     float64  `json:"budget_gb"`
+}
+
 // Status is the response from GET /v1/ps.
 type Status struct {
-	VRAMBudgetGB      float64 `json:"vram_budget_gb"`
-	VRAMUsedGB        float64 `json:"vram_used_gb"`
-	VRAMActualGB      float64 `json:"vram_actual_gb"`
-	VRAMAllocatedGB   float64 `json:"vram_allocated_gb"`
-	VRAMFreeGB        float64 `json:"vram_free_gb"`
-	VRAMConfiguredGB  float64 `json:"vram_configured_gb"`
-	GPUUtilizationPct int     `json:"gpu_utilization_pct"`
-	Models            []Model `json:"models"`
-	Queue             Queue   `json:"queue"`
+	VRAMBudgetGB      float64      `json:"vram_budget_gb"`
+	VRAMUsedGB        float64      `json:"vram_used_gb"`
+	VRAMActualGB      float64      `json:"vram_actual_gb"`
+	VRAMAllocatedGB   float64      `json:"vram_allocated_gb"`
+	VRAMFreeGB        float64      `json:"vram_free_gb"`
+	VRAMConfiguredGB  float64      `json:"vram_configured_gb"`
+	GPUUtilizationPct int          `json:"gpu_utilization_pct"`
+	Models            []Model      `json:"models"`
+	Queue             Queue        `json:"queue"`
+	RemoteHosts       []RemoteHost `json:"remote_hosts"`
 }
 
 // Client communicates with the Arbiter server.

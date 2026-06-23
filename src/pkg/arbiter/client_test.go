@@ -39,12 +39,51 @@ func TestPS(t *testing.T) {
 				MaxInstances:  1,
 				MaxConcurrent: 4,
 			},
+			{
+				ID:              "llm:gemma4-26b",
+				State:           "active",
+				MaxInstances:    1,
+				MaxConcurrent:   1,
+				LoadedInstances: 1,
+				TotalInstances:  2,
+				Instances: []Instance{
+					{
+						Host:       "boringstack",
+						Remote:     true,
+						State:      "active",
+						ActiveJobs: 2,
+						InstanceID: "llm:gemma4-26b@boringstack",
+					},
+					{
+						Host:       "spark",
+						Remote:     false,
+						State:      "stopped",
+						InstanceID: "llm:gemma4-26b",
+					},
+				},
+			},
 		},
 		Queue: Queue{
 			Queued:    4,
 			Running:   1,
 			Completed: 57,
 			Failed:    2,
+		},
+		RemoteHosts: []RemoteHost{
+			{
+				HostID:       "boringstack",
+				Addr:         "http://10.0.0.42:11434",
+				Reachable:    true,
+				ModelsLoaded: []string{"gemma4-26b-32k:latest", "llama3.2:3b"},
+				UsedGB:       12.0,
+				BudgetGB:     96.0,
+			},
+			{
+				HostID:    "darrens-mbp",
+				Addr:      "http://10.0.0.44:11434",
+				Reachable: false,
+				BudgetGB:  40.0,
+			},
 		},
 	}
 
@@ -76,8 +115,8 @@ func TestPS(t *testing.T) {
 	if status.VRAMUsedGB != 37.0 {
 		t.Errorf("VRAMUsedGB = %v, want 37.0", status.VRAMUsedGB)
 	}
-	if len(status.Models) != 2 {
-		t.Fatalf("Models count = %d, want 2", len(status.Models))
+	if len(status.Models) != 3 {
+		t.Fatalf("Models count = %d, want 3", len(status.Models))
 	}
 	if status.Models[0].ID != "flux-schnell" {
 		t.Errorf("Models[0].ID = %q, want %q", status.Models[0].ID, "flux-schnell")
@@ -105,6 +144,66 @@ func TestPS(t *testing.T) {
 	}
 	if status.Models[1].MaxConcurrent != 4 {
 		t.Errorf("Models[1].MaxConcurrent = %d, want 4", status.Models[1].MaxConcurrent)
+	}
+
+	// Per-instance host info (multi-machine model).
+	gemma := status.Models[2]
+	if gemma.ID != "llm:gemma4-26b" {
+		t.Fatalf("Models[2].ID = %q, want llm:gemma4-26b", gemma.ID)
+	}
+	if gemma.LoadedInstances != 1 {
+		t.Errorf("gemma.LoadedInstances = %d, want 1", gemma.LoadedInstances)
+	}
+	if gemma.TotalInstances != 2 {
+		t.Errorf("gemma.TotalInstances = %d, want 2", gemma.TotalInstances)
+	}
+	if len(gemma.Instances) != 2 {
+		t.Fatalf("gemma.Instances count = %d, want 2", len(gemma.Instances))
+	}
+	if gemma.Instances[0].Host != "boringstack" {
+		t.Errorf("gemma.Instances[0].Host = %q, want boringstack", gemma.Instances[0].Host)
+	}
+	if !gemma.Instances[0].Remote {
+		t.Error("gemma.Instances[0].Remote = false, want true")
+	}
+	if gemma.Instances[0].State != "active" {
+		t.Errorf("gemma.Instances[0].State = %q, want active", gemma.Instances[0].State)
+	}
+	if gemma.Instances[0].ActiveJobs != 2 {
+		t.Errorf("gemma.Instances[0].ActiveJobs = %d, want 2", gemma.Instances[0].ActiveJobs)
+	}
+	if gemma.Instances[0].InstanceID != "llm:gemma4-26b@boringstack" {
+		t.Errorf("gemma.Instances[0].InstanceID = %q, want llm:gemma4-26b@boringstack", gemma.Instances[0].InstanceID)
+	}
+	if gemma.Instances[1].Remote {
+		t.Error("gemma.Instances[1].Remote = true, want false (spark is local)")
+	}
+
+	// Remote-hosts fleet panel.
+	if len(status.RemoteHosts) != 2 {
+		t.Fatalf("RemoteHosts count = %d, want 2", len(status.RemoteHosts))
+	}
+	rh := status.RemoteHosts[0]
+	if rh.HostID != "boringstack" {
+		t.Errorf("RemoteHosts[0].HostID = %q, want boringstack", rh.HostID)
+	}
+	if rh.Addr != "http://10.0.0.42:11434" {
+		t.Errorf("RemoteHosts[0].Addr = %q, want http://10.0.0.42:11434", rh.Addr)
+	}
+	if !rh.Reachable {
+		t.Error("RemoteHosts[0].Reachable = false, want true")
+	}
+	if len(rh.ModelsLoaded) != 2 {
+		t.Errorf("RemoteHosts[0].ModelsLoaded count = %d, want 2", len(rh.ModelsLoaded))
+	}
+	if rh.BudgetGB != 96.0 {
+		t.Errorf("RemoteHosts[0].BudgetGB = %v, want 96.0", rh.BudgetGB)
+	}
+	if rh.UsedGB != 12.0 {
+		t.Errorf("RemoteHosts[0].UsedGB = %v, want 12.0", rh.UsedGB)
+	}
+	if status.RemoteHosts[1].Reachable {
+		t.Error("RemoteHosts[1].Reachable = true, want false")
 	}
 }
 
