@@ -69,8 +69,11 @@ var (
 	badgeLocalText  = textSecondary
 )
 
-// Column widths: Model (flexed), State, Max, Conc, VRAM, Active, Queued
-var colWidths = [7]unit.Dp{0, 90, 50, 50, 80, 80, 80} // model name is flexed
+// Column widths: Model (flexed), State, Max, Conc, VRAM, Active, Queued,
+// Progress, ETA. The two trailing columns are only populated for models that
+// are currently doing in-flight work (see Model.InProgress) — idle/queued-only
+// models render blank Progress/ETA cells.
+var colWidths = [9]unit.Dp{0, 90, 50, 50, 80, 80, 80, 150, 90} // model name is flexed
 
 // App holds the Spark View application state.
 type App struct {
@@ -243,6 +246,8 @@ func (a *App) layoutHeader(gtx layout.Context) layout.Dimensions {
 		{"VRAM", text.End},
 		{"Active", text.End},
 		{"Queued", text.End},
+		{"Progress", text.Start},
+		{"ETA", text.End},
 	}
 
 	nameW := totalW
@@ -332,11 +337,14 @@ func ensureTags(tags *[]bool, n int) {
 	}
 }
 
-// colIndex constants for interactive columns.
+// colIndex constants for interactive columns. Progress/ETA are appended AFTER
+// the existing columns so these interactive indices stay put.
 const (
-	colMax    = 2 // Max instances column
-	colConc   = 3 // Max concurrent column
-	colQueued = 6 // Queued jobs column
+	colMax      = 2 // Max instances column
+	colConc     = 3 // Max concurrent column
+	colQueued   = 6 // Queued jobs column
+	colProgress = 7 // Progress bar (done/total since load) — active models only
+	colETA      = 8 // Estimated time remaining — active models only
 )
 
 func (a *App) layoutRow(gtx layout.Context, m arbiter.Model, index int) layout.Dimensions {
@@ -390,6 +398,15 @@ func (a *App) layoutRow(gtx layout.Context, m arbiter.Model, index int) layout.D
 		queuedColor = accentPurple
 	}
 
+	// ETA: humanized time remaining, only for models with active in-flight work.
+	// Idle/queued-only models (InProgress == nil) render a blank cell.
+	etaText := ""
+	etaColor := textMuted
+	if m.InProgress != nil {
+		etaText = "~" + formatDuration(m.InProgress.ETASeconds)
+		etaColor = accentCyan
+	}
+
 	vramText := "-"
 	vramColor := textMuted
 	if m.State == "loaded" || m.State == "active" {
@@ -417,6 +434,8 @@ func (a *App) layoutRow(gtx layout.Context, m arbiter.Model, index int) layout.D
 		{vramText, gtx.Dp(colWidths[4]), text.End, vramColor, false},
 		{activeText, gtx.Dp(colWidths[5]), text.End, activeColor, false},
 		{queuedText, gtx.Dp(colWidths[colQueued]), text.End, queuedColor, false},
+		{"", gtx.Dp(colWidths[colProgress]), text.Start, textMuted, false}, // Progress: custom-rendered below
+		{etaText, gtx.Dp(colWidths[colETA]), text.End, etaColor, false},
 	}
 
 	hosts := runningHosts(m)
@@ -427,11 +446,16 @@ func (a *App) layoutRow(gtx layout.Context, m arbiter.Model, index int) layout.D
 		gtxCol := gtx
 		gtxCol.Constraints = layout.Exact(image.Pt(col.width, rowH))
 
-		if colIdx == 0 {
+		switch colIdx {
+		case 0:
 			// Model-name cell: truncated name (flexed) + host badge(s) (rigid),
 			// so off-spark execution is visible without overflowing the column.
 			a.layoutNameCell(gtxCol, col.val, col.color, hosts)
-		} else {
+		case colProgress:
+			// Progress cell: a bar (done/total since load) + "done/total" text,
+			// but only for models actively working. Blank otherwise.
+			a.layoutProgressCell(gtxCol, m.InProgress)
+		default:
 			layout.Inset{
 				Left: unit.Dp(16), Right: unit.Dp(16),
 				Top: unit.Dp(10),
@@ -864,6 +888,83 @@ func (a *App) layoutGaugeBar(gtx layout.Context, used, budget float64) layout.Di
 			NE:   radius, NW: radius, SE: radius, SW: radius,
 		}
 		paint.FillShape(gtx.Ops, fillColor, fillRect.Op(gtx.Ops))
+	}
+
+	return layout.Dimensions{Size: image.Pt(barW, barH)}
+}
+
+// progressFraction returns done/total clamped to [0,1]; 0 when total <= 0.
+func progressFraction(done, total int) float64 {
+	if total <= 0 {
+		return 0
+	}
+	f := float64(done) / float64(total)
+	if f < 0 {
+		return 0
+	}
+	if f > 1 {
+		return 1
+	}
+	return f
+}
+
+// layoutProgressCell renders a model's "done since load / total since load"
+// progress as a filled bar plus a "done/total" label. It renders nothing (an
+// empty cell) when the model has no in-flight work (ip == nil), so idle and
+// queued-only models show a blank Progress column.
+func (a *App) layoutProgressCell(gtx layout.Context, ip *arbiter.InProgress) layout.Dimensions {
+	if ip == nil {
+		return layout.Dimensions{Size: gtx.Constraints.Min}
+	}
+	frac := progressFraction(ip.DoneSinceLoad, ip.TotalSinceLoad)
+	label := fmt.Sprintf("%d/%d", ip.DoneSinceLoad, ip.TotalSinceLoad)
+
+	return layout.Inset{
+		Left: unit.Dp(16), Right: unit.Dp(16),
+		Top: unit.Dp(10),
+	}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		return layout.Flex{Axis: layout.Horizontal, Alignment: layout.Middle}.Layout(gtx,
+			layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
+				return layout.Inset{Top: unit.Dp(4), Bottom: unit.Dp(4)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+					return layoutProgressBar(gtx, frac)
+				})
+			}),
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+				return layout.Inset{Left: unit.Dp(8)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+					l := material.Body2(a.theme, label)
+					l.Color = textSecondary
+					l.TextSize = unit.Sp(11)
+					l.MaxLines = 1
+					return l.Layout(gtx)
+				})
+			}),
+		)
+	})
+}
+
+// layoutProgressBar draws a rounded track with an accent-orange fill covering
+// the given fraction [0,1] of the cell width.
+func layoutProgressBar(gtx layout.Context, frac float64) layout.Dimensions {
+	barH := gtx.Dp(unit.Dp(8))
+	barW := gtx.Constraints.Max.X
+	radius := barH / 2
+
+	trackRect := clip.RRect{
+		Rect: image.Rect(0, 0, barW, barH),
+		NE:   radius, NW: radius, SE: radius, SW: radius,
+	}
+	paint.FillShape(gtx.Ops, gaugeTrack, trackRect.Op(gtx.Ops))
+
+	if frac > 1 {
+		frac = 1
+	}
+	fillW := int(math.Round(frac * float64(barW)))
+	if fillW > 0 {
+		fillRect := clip.RRect{
+			Rect: image.Rect(0, 0, fillW, barH),
+			NE:   radius, NW: radius, SE: radius, SW: radius,
+		}
+		paint.FillShape(gtx.Ops, accentOrange, fillRect.Op(gtx.Ops))
 	}
 
 	return layout.Dimensions{Size: image.Pt(barW, barH)}

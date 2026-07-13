@@ -207,6 +207,70 @@ func TestPS(t *testing.T) {
 	}
 }
 
+// TestPSInProgress verifies the client parses the in_progress panel that
+// arbiter emits only for actively-working models, and leaves it nil otherwise.
+func TestPSInProgress(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+
+	// Raw JSON so we exercise the real wire shape arbiter produces: "busy" has an
+	// in_progress block (ledger worked example), "idle" has none.
+	body := `{
+		"models": [
+			{"id":"ltx2-dev-noise1","state":"active","active_jobs":2,"queued_jobs":23,
+			 "in_progress":{"done_since_load":3,"total_since_load":28,
+			   "avg_action_seconds":360,"eta_seconds":9000,"loaded_at":1700000000.5}},
+			{"id":"whisper-large","state":"loaded","active_jobs":0,"queued_jobs":0}
+		]
+	}`
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /v1/ps", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(body))
+	})
+
+	server := &http.Server{Handler: mux}
+	go func() { _ = server.Serve(listener) }()
+	t.Cleanup(func() { _ = server.Close() })
+
+	client := NewClient("http://" + listener.Addr().String())
+	status, err := client.PS()
+	if err != nil {
+		t.Fatalf("PS() error: %v", err)
+	}
+	if len(status.Models) != 2 {
+		t.Fatalf("Models count = %d, want 2", len(status.Models))
+	}
+
+	busy := status.Models[0]
+	if busy.InProgress == nil {
+		t.Fatal("busy model InProgress is nil, want populated panel")
+	}
+	if busy.InProgress.DoneSinceLoad != 3 {
+		t.Errorf("DoneSinceLoad = %d, want 3", busy.InProgress.DoneSinceLoad)
+	}
+	if busy.InProgress.TotalSinceLoad != 28 {
+		t.Errorf("TotalSinceLoad = %d, want 28", busy.InProgress.TotalSinceLoad)
+	}
+	if busy.InProgress.AvgActionSeconds != 360 {
+		t.Errorf("AvgActionSeconds = %v, want 360", busy.InProgress.AvgActionSeconds)
+	}
+	if busy.InProgress.ETASeconds != 9000 {
+		t.Errorf("ETASeconds = %v, want 9000", busy.InProgress.ETASeconds)
+	}
+	if busy.InProgress.LoadedAt != 1700000000.5 {
+		t.Errorf("LoadedAt = %v, want 1700000000.5", busy.InProgress.LoadedAt)
+	}
+
+	idle := status.Models[1]
+	if idle.InProgress != nil {
+		t.Errorf("idle model InProgress = %+v, want nil", idle.InProgress)
+	}
+}
+
 // TestPSError verifies the client handles server errors gracefully.
 func TestPSError(t *testing.T) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")

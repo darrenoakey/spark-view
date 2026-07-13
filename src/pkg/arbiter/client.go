@@ -24,20 +24,39 @@ type Instance struct {
 	InstanceID string `json:"instance_id"`
 }
 
+// InProgress describes a model that is currently doing in-flight work. Arbiter
+// only emits it while a model has active jobs, so its presence alone means the
+// model is busy and the dashboard should show a progress bar + ETA for it.
+//
+//   - DoneSinceLoad / TotalSinceLoad are the progress-bar numerator/denominator,
+//     counted since the model's CURRENT residency began — they intentionally
+//     reset when the model is reloaded, and Total can grow while running as new
+//     work queues against the live model.
+//   - AvgActionSeconds is the persisted rolling per-action average that survives
+//     arbiter restarts; ETASeconds = outstanding * AvgActionSeconds.
+type InProgress struct {
+	DoneSinceLoad    int     `json:"done_since_load"`
+	TotalSinceLoad   int     `json:"total_since_load"`
+	AvgActionSeconds float64 `json:"avg_action_seconds"`
+	ETASeconds       float64 `json:"eta_seconds"`
+	LoadedAt         float64 `json:"loaded_at"`
+}
+
 // Model represents a single model's status in the Arbiter system.
 type Model struct {
-	ID              string     `json:"id"`
-	State           string     `json:"state"`
-	MemoryGB        float64    `json:"memory_gb"` // allocated/configured memory
-	VRAMGB          float64    `json:"vram_gb"`   // actual VRAM usage (when loaded)
-	ActiveJobs      int        `json:"active_jobs"`
-	QueuedJobs      int        `json:"queued_jobs"`
-	IdleSeconds     *float64   `json:"idle_seconds"`
-	MaxInstances    int        `json:"max_instances"`
-	MaxConcurrent   int        `json:"max_concurrent"`
-	Instances       []Instance `json:"instances"`
-	LoadedInstances int        `json:"loaded_instances"`
-	TotalInstances  int        `json:"total_instances"`
+	ID              string      `json:"id"`
+	State           string      `json:"state"`
+	MemoryGB        float64     `json:"memory_gb"` // allocated/configured memory
+	VRAMGB          float64     `json:"vram_gb"`   // actual VRAM usage (when loaded)
+	ActiveJobs      int         `json:"active_jobs"`
+	QueuedJobs      int         `json:"queued_jobs"`
+	IdleSeconds     *float64    `json:"idle_seconds"`
+	MaxInstances    int         `json:"max_instances"`
+	MaxConcurrent   int         `json:"max_concurrent"`
+	Instances       []Instance  `json:"instances"`
+	LoadedInstances int         `json:"loaded_instances"`
+	TotalInstances  int         `json:"total_instances"`
+	InProgress      *InProgress `json:"in_progress"` // present only while actively working
 }
 
 // Queue holds global job counts across all models.

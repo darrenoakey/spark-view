@@ -2,7 +2,50 @@ package ui
 
 import (
 	"testing"
+
+	"sparkview/pkg/arbiter"
 )
+
+// TestProgressFraction verifies the progress-bar fraction is clamped and safe.
+func TestProgressFraction(t *testing.T) {
+	tests := []struct {
+		name        string
+		done, total int
+		want        float64
+	}{
+		{"zero total", 0, 0, 0},
+		{"half", 5, 10, 0.5},
+		{"the ledger example", 3, 28, 3.0 / 28.0},
+		{"complete", 10, 10, 1},
+		{"overshoot clamps", 12, 10, 1}, // total can lag done momentarily
+		{"negative total", 1, -1, 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := progressFraction(tt.done, tt.total); got != tt.want {
+				t.Errorf("progressFraction(%d,%d) = %v, want %v", tt.done, tt.total, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestInProgressETAFormatting proves the ledger's worked example renders as a
+// human-readable ETA: ltx2-dev-noise1 at 6 min/action with 25 outstanding =>
+// 9000s => "2h 30m".
+func TestInProgressETAFormatting(t *testing.T) {
+	ip := arbiter.InProgress{
+		DoneSinceLoad:    3,
+		TotalSinceLoad:   28,
+		AvgActionSeconds: 360,
+		ETASeconds:       25 * 360, // 25 outstanding * 6 min
+	}
+	if got := formatDuration(ip.ETASeconds); got != "2h 30m" {
+		t.Errorf("ETA format = %q, want %q", got, "2h 30m")
+	}
+	if got := progressFraction(ip.DoneSinceLoad, ip.TotalSinceLoad); got != 3.0/28.0 {
+		t.Errorf("progress = %v, want %v", got, 3.0/28.0)
+	}
+}
 
 // TestGaugeColor verifies gauge color thresholds.
 func TestGaugeColor(t *testing.T) {
