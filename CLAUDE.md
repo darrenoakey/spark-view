@@ -101,6 +101,37 @@ the shell: check `launchctl print gui/$(id -u)/com.darrenoakey.sparkview` is
 loaded, and that **Spark View** is still enabled in System Settings → Privacy &
 Security → Local Network.
 
+## Stale telemetry must never look live
+
+A failed poll leaves the last good `Status` in memory on purpose — `Refresh`
+only overwrites `a.status` on success, so the numbers you saw a second before a
+network drop are still there. That history is useful, but the status bar renders
+it in the SAME frame as the giant red `SERVER DOWN` panel, and the numeric half
+wins: a frozen `VRAM 24 (80) / 90 GB · GPU 0% · 1 run` is indistinguishable
+from a live idle GPU.
+
+That exact frame was misread on **2026-08-12**: spark had been dead and off the
+network for 84 minutes (`connect: host is down`, ARP incomplete even from the
+Mac mini) and the bar was read as "something is running but the GPU is at 0%,
+so it's just not working" — a software diagnosis for a box that had
+hard-crashed on unified-memory exhaustion.
+
+Two rules, both enforced in code:
+
+1. **Every value painted from `a.status` passes through `mutedIfStale(clr,
+   connected)`** — gauges, VRAM/GPU numbers, queue counts, remote-host dots and
+   labels. Stale reads as neutral grey; only a live poll gets accent colour.
+   `offline` itself turns red. When adding a status-bar widget, thread `live`
+   into it; a new widget that ignores it silently reintroduces the lie.
+2. **`lastGood` (not `lastRefresh`) is the age of the data.** `lastRefresh`
+   advances on failed polls too, so it can never answer "how old is what I am
+   looking at". The `SERVER DOWN` panel states it outright via `lastDataText`:
+   `Last data 17:08:11 — 1h 24m ago`, and stays silent when no poll ever
+   succeeded (nothing stale to explain).
+
+Verify a change to any of this against a **local** throwaway Arbiter that you
+then kill — that reproduces the frozen-bar state in seconds and needs no spark.
+
 ## Gio Gotchas
 
 - `app.Main()` MUST stay on main goroutine; event loop in goroutine

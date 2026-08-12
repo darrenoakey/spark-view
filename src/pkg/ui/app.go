@@ -84,8 +84,12 @@ type App struct {
 	mu          sync.Mutex
 	status      arbiter.Status
 	lastRefresh time.Time // end of the most recent poll (success or failure)
-	lastErr     error
-	connected   bool
+	// lastGood is the end of the most recent SUCCESSFUL poll, i.e. the true age
+	// of the telemetry on screen. lastRefresh cannot answer that because it
+	// advances on failed polls too.
+	lastGood  time.Time
+	lastErr   error
+	connected bool
 
 	list      widget.List
 	maxTags   []bool // pointer tags for max-instances column right-click
@@ -122,6 +126,7 @@ func (a *App) Refresh() {
 		a.connected = false
 	} else {
 		a.status = status
+		a.lastGood = time.Now()
 		a.lastErr = nil
 		a.connected = true
 	}
@@ -154,6 +159,7 @@ func (a *App) Layout(gtx layout.Context) layout.Dimensions {
 	connected := a.connected
 	lastErr := a.lastErr
 	lastRefresh := a.lastRefresh
+	lastGood := a.lastGood
 	a.mu.Unlock()
 
 	dims := layout.Flex{Axis: layout.Vertical}.Layout(gtx,
@@ -170,7 +176,7 @@ func (a *App) Layout(gtx layout.Context) layout.Dimensions {
 				return a.layoutConnecting(gtx)
 			}
 			if !connected {
-				return a.layoutDisconnected(gtx, lastErr)
+				return a.layoutDisconnected(gtx, lastErr, lastGood)
 			}
 			return a.layoutTable(gtx, status)
 		}),
@@ -295,7 +301,7 @@ func (a *App) layoutConnecting(gtx layout.Context) layout.Dimensions {
 	})
 }
 
-func (a *App) layoutDisconnected(gtx layout.Context, lastErr error) layout.Dimensions {
+func (a *App) layoutDisconnected(gtx layout.Context, lastErr error, lastGood time.Time) layout.Dimensions {
 	// Red-tinted background fill
 	bannerBG := color.NRGBA{R: 0x3a, G: 0x0a, B: 0x0a, A: 0xff}
 	paint.FillShape(gtx.Ops, bannerBG, clip.Rect{Max: gtx.Constraints.Max}.Op())
@@ -316,6 +322,17 @@ func (a *App) layoutDisconnected(gtx layout.Context, lastErr error) layout.Dimen
 					msg = lastErr.Error()
 				}
 				l := material.Body1(a.theme, msg)
+				l.Color = textMuted
+				l.Alignment = text.Middle
+				return l.Layout(gtx)
+			}),
+			layout.Rigid(layout.Spacer{Height: unit.Dp(8)}.Layout),
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+				age := lastDataText(lastGood, time.Now())
+				if age == "" {
+					return layout.Dimensions{}
+				}
+				l := material.Body2(a.theme, age)
 				l.Color = textMuted
 				l.Alignment = text.Middle
 				return l.Layout(gtx)
@@ -699,7 +716,7 @@ func (a *App) layoutStatusBar(gtx layout.Context, status arbiter.Status, connect
 						return layout.Inset{Left: unit.Dp(8)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 							gtx.Constraints.Min.X = gtx.Dp(unit.Dp(100))
 							gtx.Constraints.Max.X = gtx.Dp(unit.Dp(100))
-							return a.layoutGaugeBar(gtx, status.VRAMActualGB, status.VRAMBudgetGB)
+							return a.layoutGaugeBar(gtx, status.VRAMActualGB, status.VRAMBudgetGB, connected)
 						})
 					}),
 					// VRAM numbers: actual (allocated) / budget
@@ -707,7 +724,7 @@ func (a *App) layoutStatusBar(gtx layout.Context, status arbiter.Status, connect
 						return layout.Inset{Left: unit.Dp(8)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 							l := material.Body2(a.theme, fmt.Sprintf("%.0f (%.0f) / %.0f GB",
 								status.VRAMActualGB, status.VRAMAllocatedGB, status.VRAMBudgetGB))
-							l.Color = textSecondary
+							l.Color = mutedIfStale(textSecondary, connected)
 							l.TextSize = unit.Sp(10)
 							return l.Layout(gtx)
 						})
@@ -726,14 +743,14 @@ func (a *App) layoutStatusBar(gtx layout.Context, status arbiter.Status, connect
 						return layout.Inset{Left: unit.Dp(8)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 							gtx.Constraints.Min.X = gtx.Dp(unit.Dp(60))
 							gtx.Constraints.Max.X = gtx.Dp(unit.Dp(60))
-							return a.layoutGaugeBar(gtx, float64(status.GPUUtilizationPct), 100)
+							return a.layoutGaugeBar(gtx, float64(status.GPUUtilizationPct), 100, connected)
 						})
 					}),
 					// GPU utilization percentage
 					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 						return layout.Inset{Left: unit.Dp(8)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 							l := material.Body2(a.theme, fmt.Sprintf("%d%%", status.GPUUtilizationPct))
-							l.Color = textSecondary
+							l.Color = mutedIfStale(textSecondary, connected)
 							l.TextSize = unit.Sp(10)
 							return l.Layout(gtx)
 						})
@@ -742,27 +759,27 @@ func (a *App) layoutStatusBar(gtx layout.Context, status arbiter.Status, connect
 			}),
 			// Middle: remote-hosts fleet indicator (nothing if no remote hosts)
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				return a.layoutRemoteHosts(gtx, status.RemoteHosts)
+				return a.layoutRemoteHosts(gtx, status.RemoteHosts, connected)
 			}),
 			// Right side: queue stats
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 				return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
 					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-						return a.layoutStatusStat(gtx, "run", status.Queue.Running, accentGreen)
+						return a.layoutStatusStat(gtx, "run", status.Queue.Running, accentGreen, connected)
 					}),
 					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 						return layout.Inset{Left: unit.Dp(16)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-							return a.layoutStatusStat(gtx, "queue", status.Queue.Queued, accentPurple)
+							return a.layoutStatusStat(gtx, "queue", status.Queue.Queued, accentPurple, connected)
 						})
 					}),
 					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 						return layout.Inset{Left: unit.Dp(16)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-							return a.layoutStatusStat(gtx, "done", status.Queue.Completed, accentCyan)
+							return a.layoutStatusStat(gtx, "done", status.Queue.Completed, accentCyan, connected)
 						})
 					}),
 					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 						return layout.Inset{Left: unit.Dp(16)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-							return a.layoutStatusStat(gtx, "fail", status.Queue.Failed, accentRed)
+							return a.layoutStatusStat(gtx, "fail", status.Queue.Failed, accentRed, connected)
 						})
 					}),
 					// Update time
@@ -782,6 +799,9 @@ func (a *App) layoutStatusBar(gtx layout.Context, status arbiter.Status, connect
 							}
 							l := material.Body2(a.theme, statusText)
 							l.Color = textMuted
+							if !connected && lastErr != nil {
+								l.Color = accentRed
+							}
 							l.TextSize = unit.Sp(10)
 							return l.Layout(gtx)
 						})
@@ -792,12 +812,12 @@ func (a *App) layoutStatusBar(gtx layout.Context, status arbiter.Status, connect
 	})
 }
 
-func (a *App) layoutStatusStat(gtx layout.Context, label string, count int, clr color.NRGBA) layout.Dimensions {
+func (a *App) layoutStatusStat(gtx layout.Context, label string, count int, clr color.NRGBA, live bool) layout.Dimensions {
 	return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 			numColor := textMuted
 			if count > 0 {
-				numColor = clr
+				numColor = mutedIfStale(clr, live)
 			}
 			l := material.Body2(a.theme, fmt.Sprintf("%d", count))
 			l.Color = numColor
@@ -819,7 +839,7 @@ func (a *App) layoutStatusStat(gtx layout.Context, label string, count int, clr 
 // layoutRemoteHosts renders a compact at-a-glance fleet view: one small dot per
 // remote host (green if reachable, red if not) followed by its host_id label.
 // Renders nothing when there are no remote hosts.
-func (a *App) layoutRemoteHosts(gtx layout.Context, hosts []arbiter.RemoteHost) layout.Dimensions {
+func (a *App) layoutRemoteHosts(gtx layout.Context, hosts []arbiter.RemoteHost, live bool) layout.Dimensions {
 	if len(hosts) == 0 {
 		return layout.Dimensions{}
 	}
@@ -841,6 +861,7 @@ func (a *App) layoutRemoteHosts(gtx layout.Context, hosts []arbiter.RemoteHost) 
 						if h.Reachable {
 							dotColor = dotLoaded
 						}
+						dotColor = mutedIfStale(dotColor, live)
 						r := clip.Ellipse{Max: image.Pt(dotSize, dotSize)}.Op(gtx.Ops)
 						paint.FillShape(gtx.Ops, dotColor, r)
 						return layout.Dimensions{Size: image.Pt(dotSize, dotSize)}
@@ -848,7 +869,7 @@ func (a *App) layoutRemoteHosts(gtx layout.Context, hosts []arbiter.RemoteHost) 
 					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 						return layout.Inset{Left: unit.Dp(5)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 							l := material.Body2(a.theme, h.HostID)
-							l.Color = textSecondary
+							l.Color = mutedIfStale(textSecondary, live)
 							l.TextSize = unit.Sp(10)
 							l.MaxLines = 1
 							return l.Layout(gtx)
@@ -862,7 +883,7 @@ func (a *App) layoutRemoteHosts(gtx layout.Context, hosts []arbiter.RemoteHost) 
 	return layout.Flex{Alignment: layout.Middle}.Layout(gtx, children...)
 }
 
-func (a *App) layoutGaugeBar(gtx layout.Context, used, budget float64) layout.Dimensions {
+func (a *App) layoutGaugeBar(gtx layout.Context, used, budget float64, live bool) layout.Dimensions {
 	barH := gtx.Dp(unit.Dp(6))
 	barW := gtx.Constraints.Max.X
 	radius := barH / 2
@@ -882,7 +903,7 @@ func (a *App) layoutGaugeBar(gtx layout.Context, used, budget float64) layout.Di
 	}
 	fillW := int(math.Round(pct * float64(barW)))
 	if fillW > 0 {
-		fillColor := gaugeColor(pct)
+		fillColor := mutedIfStale(gaugeColor(pct), live)
 		fillRect := clip.RRect{
 			Rect: image.Rect(0, 0, fillW, barH),
 			NE:   radius, NW: radius, SE: radius, SW: radius,
@@ -1003,4 +1024,33 @@ func formatDuration(seconds float64) string {
 	default:
 		return fmt.Sprintf("%dh %dm", int(d.Hours()), int(d.Minutes())%60)
 	}
+}
+
+// mutedIfStale desaturates a colour when the value it paints is a frozen
+// snapshot rather than a live measurement.
+//
+// A failed poll deliberately keeps the last good telemetry on screen — that
+// history is useful — but it must never read as current. A stale
+// "VRAM 24 (80) / 90 GB, GPU 0%, 0 run" is indistinguishable from a live idle
+// GPU, and it has already been misread as "spark is running but not working"
+// while the box was in fact dead and off the network.
+func mutedIfStale(clr color.NRGBA, live bool) color.NRGBA {
+	if live {
+		return clr
+	}
+	grey := uint8((int(clr.R) + int(clr.G) + int(clr.B)) / 6)
+	return color.NRGBA{R: grey, G: grey, B: grey, A: clr.A}
+}
+
+// lastDataText describes how old the telemetry on screen is. It is empty when
+// no poll has ever succeeded, because then there is no stale data to explain.
+func lastDataText(lastGood, now time.Time) string {
+	if lastGood.IsZero() {
+		return ""
+	}
+	age := now.Sub(lastGood)
+	if age < 0 {
+		age = 0
+	}
+	return fmt.Sprintf("Last data %s — %s ago", lastGood.Format("15:04:05"), formatDuration(age.Seconds()))
 }

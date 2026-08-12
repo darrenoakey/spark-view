@@ -1,7 +1,10 @@
 package ui
 
 import (
+	"image/color"
+	"strings"
 	"testing"
+	"time"
 
 	"sparkview/pkg/arbiter"
 )
@@ -105,5 +108,70 @@ func TestFormatDuration(t *testing.T) {
 				t.Errorf("formatDuration(%v) = %q, want %q", tt.seconds, got, tt.want)
 			}
 		})
+	}
+}
+
+// TestMutedIfStaleKeepsLiveColours proves a live reading is painted with its
+// real accent colour — muting must cost nothing while the link is up.
+func TestMutedIfStaleKeepsLiveColours(t *testing.T) {
+	for _, clr := range []color.NRGBA{accentGreen, accentRed, gaugeFull, textSecondary, dotLoaded} {
+		if got := mutedIfStale(clr, true); got != clr {
+			t.Errorf("mutedIfStale(%v, live) = %v, want it unchanged", clr, got)
+		}
+	}
+}
+
+// TestMutedIfStaleGreysFrozenTelemetry is the regression guard for the
+// 2026-08-12 misread: spark had been dead and off the network for 84 minutes
+// while the status bar still painted "VRAM 24 (80) / 90 GB, GPU 0%" in live
+// colours, which read as a running-but-broken GPU. Stale values must be
+// colourless (R==G==B) and visibly darker than the live accent.
+func TestMutedIfStaleGreysFrozenTelemetry(t *testing.T) {
+	for _, clr := range []color.NRGBA{accentGreen, accentRed, gaugeFull, dotLoaded} {
+		got := mutedIfStale(clr, false)
+		if got.R != got.G || got.G != got.B {
+			t.Errorf("mutedIfStale(%v, stale) = %v, want a neutral grey", clr, got)
+		}
+		brightest := max(max(clr.R, clr.G), clr.B)
+		if got.R >= brightest {
+			t.Errorf("mutedIfStale(%v, stale) = %v, want dimmer than %d", clr, got, brightest)
+		}
+		if got.A != clr.A {
+			t.Errorf("mutedIfStale(%v, stale) alpha = %d, want %d", clr, got.A, clr.A)
+		}
+	}
+}
+
+// TestLastDataTextSilentBeforeFirstSuccess: with no successful poll ever there
+// is no stale data, so the SERVER DOWN panel must not claim an age.
+func TestLastDataTextSilentBeforeFirstSuccess(t *testing.T) {
+	if got := lastDataText(time.Time{}, time.Now()); got != "" {
+		t.Errorf("lastDataText(zero) = %q, want empty", got)
+	}
+}
+
+// TestLastDataTextReportsRealAge pins the exact incident: last good poll at
+// 17:08:11, read at 18:32 — the panel must name both the clock time and the
+// 1h 24m age, because "offline" alone did not stop the frozen bar being read
+// as live.
+func TestLastDataTextReportsRealAge(t *testing.T) {
+	lastGood := time.Date(2026, 8, 12, 17, 8, 11, 0, time.Local)
+	now := lastGood.Add(84*time.Minute + 23*time.Second)
+
+	got := lastDataText(lastGood, now)
+	for _, want := range []string{"17:08:11", "1h 24m", "ago"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("lastDataText = %q, want it to contain %q", got, want)
+		}
+	}
+}
+
+// TestLastDataTextNeverGoesNegative: a clock skew backwards must not render a
+// negative age.
+func TestLastDataTextNeverGoesNegative(t *testing.T) {
+	lastGood := time.Now()
+	got := lastDataText(lastGood, lastGood.Add(-5*time.Minute))
+	if strings.Contains(got, "-") {
+		t.Errorf("lastDataText with skewed clock = %q, want no negative age", got)
 	}
 }
