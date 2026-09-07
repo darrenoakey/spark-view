@@ -6,6 +6,12 @@ GPU inference dashboard for the Arbiter server on spark (10.0.0.254:8400).
 
 - **Go + Gio** (immediate-mode desktop GUI)
 - Polls `GET /v1/ps` with 3s sleep between requests for VRAM, model, and queue status
+- The optional `active_jobs_detail` /v1/ps panel feeds the LIVE JOBS section: one
+  compact row per non-terminal job (oldest first) with state, type, model, who
+  (submitting service/agent) and why (root human reason, accent-orange; hovering
+  a row reveals `who — why` in full in the panel header). The section hides
+  entirely when the panel is absent (older server), empty (idle), or the link is
+  down — frozen job rows must never look live
 - Dark theme with cyan/green/purple accent palette
 - Window size/position persistence via daz-golang-gio/persist
 - Right-click context menu on rows via daz-golang-gio/menu (e.g. change max instances)
