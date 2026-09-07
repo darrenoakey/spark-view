@@ -175,3 +175,92 @@ func TestLastDataTextNeverGoesNegative(t *testing.T) {
 		t.Errorf("lastDataText with skewed clock = %q, want no negative age", got)
 	}
 }
+
+// TestPrepareJobRows covers the live-jobs panel's data prep: fields pass
+// through in server order (oldest first), state colours map per state, and an
+// absent/empty panel yields no rows so the section hides entirely (the
+// graceful-degradation path for older arbiters).
+func TestPrepareJobRows(t *testing.T) {
+	if rows := prepareJobRows(nil); rows != nil {
+		t.Errorf("prepareJobRows(nil) = %v, want nil", rows)
+	}
+	if rows := prepareJobRows([]arbiter.ActiveJob{}); len(rows) != 0 {
+		t.Errorf("prepareJobRows(empty) = %v, want empty", rows)
+	}
+
+	jobs := []arbiter.ActiveJob{
+		{JobID: "j-1", Type: "ltx25-encode", Model: "ltx25", State: "running",
+			Who: "waggler", Why: "hang williams video"},
+		{JobID: "j-2", Type: "tts", Model: "kokoro", State: "queued"},
+		{JobID: "j-3", Type: "chat", Model: "llm:gemma", State: "following", Who: "beezle"},
+		{JobID: "j-4", Type: "whisper", Model: "whisper-large", State: "future-state"},
+	}
+	rows := prepareJobRows(jobs)
+	if len(rows) != len(jobs) {
+		t.Fatalf("rows = %d, want %d", len(rows), len(jobs))
+	}
+
+	r := rows[0]
+	if r.State != "running" || r.Type != "ltx25-encode" || r.Model != "ltx25" ||
+		r.Who != "waggler" || r.Why != "hang williams video" {
+		t.Errorf("rows[0] = %+v, want the ltx encode job fields verbatim", r)
+	}
+	if r.StateClr != accentGreen {
+		t.Errorf("rows[0].StateClr = %v, want accentGreen for running", r.StateClr)
+	}
+	if rows[1].StateClr != accentPurple {
+		t.Errorf("rows[1].StateClr = %v, want accentPurple for queued", rows[1].StateClr)
+	}
+	if rows[2].StateClr != accentOrange {
+		t.Errorf("rows[2].StateClr = %v, want accentOrange for following", rows[2].StateClr)
+	}
+	if rows[3].StateClr != textMuted {
+		t.Errorf("rows[3].StateClr = %v, want textMuted for an unknown state", rows[3].StateClr)
+	}
+
+	// Optional fields stay empty — the renderer shows a dash, never a guess.
+	if rows[1].Who != "" || rows[1].Why != "" {
+		t.Errorf("rows[1] who/why = %q/%q, want empty", rows[1].Who, rows[1].Why)
+	}
+}
+
+// TestJobStateColor pins the state→colour mapping the live-jobs rows rely on.
+func TestJobStateColor(t *testing.T) {
+	tests := []struct {
+		state string
+		want  color.NRGBA
+	}{
+		{"running", accentGreen},
+		{"scheduled", accentCyan},
+		{"queued", accentPurple},
+		{"following", accentOrange},
+		{"", textMuted},
+		{"something-new", textMuted},
+	}
+	for _, tt := range tests {
+		if got := jobStateColor(tt.state); got != tt.want {
+			t.Errorf("jobStateColor(%q) = %v, want %v", tt.state, got, tt.want)
+		}
+	}
+}
+
+// TestJobDetailLine covers the hover-reveal line: who and why joined in full,
+// whichever is present alone, and an explicit placeholder when the job carries
+// no provenance at all.
+func TestJobDetailLine(t *testing.T) {
+	tests := []struct {
+		name string
+		job  jobRowData
+		want string
+	}{
+		{"who and why", jobRowData{Who: "waggler", Why: "hang williams video"}, "waggler — hang williams video"},
+		{"why only", jobRowData{Why: "hang williams video"}, "hang williams video"},
+		{"who only", jobRowData{Who: "beezle"}, "beezle"},
+		{"neither", jobRowData{}, "(no provenance recorded)"},
+	}
+	for _, tt := range tests {
+		if got := jobDetailLine(tt.job); got != tt.want {
+			t.Errorf("%s: jobDetailLine = %q, want %q", tt.name, got, tt.want)
+		}
+	}
+}

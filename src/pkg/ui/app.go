@@ -96,6 +96,10 @@ type App struct {
 	concTags  []bool // pointer tags for max-concurrent column right-click
 	queueTags []bool // pointer tags for queued column right-click
 
+	jobsList widget.List
+	jobTags  []bool // pointer hover tags for live-job rows
+	hoverJob int    // hovered live-job row index, -1 = none (reveals full why in header)
+
 	ctxMenu     menu.ContextMenu
 	ctxMenuType string // "max", "conc", or "clear"
 	ctxModelID  string // model ID for the open context menu
@@ -105,11 +109,13 @@ type App struct {
 func NewApp(win *app.Window, client *arbiter.Client) *App {
 	th := material.NewTheme()
 	a := &App{
-		theme:  th,
-		win:    win,
-		client: client,
+		theme:    th,
+		win:      win,
+		client:   client,
+		hoverJob: -1,
 	}
 	a.list.Axis = layout.Vertical
+	a.jobsList.Axis = layout.Vertical
 	return a
 }
 
@@ -179,6 +185,15 @@ func (a *App) Layout(gtx layout.Context) layout.Dimensions {
 				return a.layoutDisconnected(gtx, lastErr, lastGood)
 			}
 			return a.layoutTable(gtx, status)
+		}),
+		// Live-jobs panel (per-job caller provenance). Hidden entirely when the
+		// link is down — frozen job rows must never look live (see mutedIfStale)
+		// — or when the server does not report active_jobs_detail.
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			if !connected {
+				return layout.Dimensions{}
+			}
+			return a.layoutLiveJobs(gtx, status)
 		}),
 		// Bottom separator
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
@@ -345,6 +360,292 @@ func (a *App) layoutTable(gtx layout.Context, status arbiter.Status) layout.Dime
 	return material.List(a.theme, &a.list).Layout(gtx, len(status.Models), func(gtx layout.Context, index int) layout.Dimensions {
 		return a.layoutRow(gtx, status.Models[index], index)
 	})
+}
+
+// Live-jobs panel geometry: compact rows, capped list height so the panel can
+// never crowd out the model table — the list scrolls internally beyond the cap.
+const (
+	jobRowH      = unit.Dp(24)
+	jobsHeaderH  = unit.Dp(22)
+	jobsDetailH  = unit.Dp(18)
+	jobsMaxListH = unit.Dp(126)
+)
+
+// jobRowData is the prepared display data for one live-job row — the seam
+// between /v1/ps parsing and Gio rendering, so the panel's data prep is
+// unit-testable without a window.
+type jobRowData struct {
+	State    string
+	Type     string
+	Model    string
+	Who      string
+	Why      string
+	StateClr color.NRGBA
+}
+
+// prepareJobRows converts active_jobs_detail entries (already oldest-first
+// from the server) into display rows. Empty input yields no rows, which hides
+// the whole panel — that is also the graceful-degradation path for older
+// servers without the panel.
+func prepareJobRows(jobs []arbiter.ActiveJob) []jobRowData {
+	if len(jobs) == 0 {
+		return nil
+	}
+	rows := make([]jobRowData, 0, len(jobs))
+	for _, j := range jobs {
+		rows = append(rows, jobRowData{
+			State:    j.State,
+			Type:     j.Type,
+			Model:    j.Model,
+			Who:      j.Who,
+			Why:      j.Why,
+			StateClr: jobStateColor(j.State),
+		})
+	}
+	return rows
+}
+
+// jobStateColor maps a live-job state to its accent colour.
+func jobStateColor(state string) color.NRGBA {
+	switch state {
+	case "running":
+		return accentGreen
+	case "scheduled":
+		return accentCyan
+	case "queued":
+		return accentPurple
+	case "following":
+		return accentOrange
+	default:
+		return textMuted
+	}
+}
+
+// jobDetailLine is the full-text line revealed in the panel header while a row
+// is hovered — the closest thing to a tooltip this toolkit style has. It spells
+// out who and why in full when the row's single-line truncation bites.
+func jobDetailLine(j jobRowData) string {
+	switch {
+	case j.Who != "" && j.Why != "":
+		return j.Who + " — " + j.Why
+	case j.Why != "":
+		return j.Why
+	case j.Who != "":
+		return j.Who
+	default:
+		return "(no provenance recorded)"
+	}
+}
+
+// layoutLiveJobs renders the per-job caller-provenance panel backed by the
+// /v1/ps active_jobs_detail panel: one compact row per non-terminal job showing
+// state, type, model, who (the submitting service/agent) and why (the root
+// human reason for the GPU work — the star of the panel), oldest first exactly
+// as the server orders them. An older server without the panel (or an idle
+// one) hides the section entirely.
+func (a *App) layoutLiveJobs(gtx layout.Context, status arbiter.Status) layout.Dimensions {
+	jobs := prepareJobRows(status.ActiveJobsDetail)
+	if len(jobs) == 0 {
+		return layout.Dimensions{}
+	}
+	if a.hoverJob >= len(jobs) {
+		a.hoverJob = -1
+	}
+
+	return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			return a.layoutJobsHeader(gtx, jobs)
+		}),
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			rowH := gtx.Dp(jobRowH)
+			maxH := gtx.Dp(jobsMaxListH)
+			h := rowH * len(jobs)
+			if h > maxH {
+				h = maxH
+			}
+			gtx.Constraints = layout.Exact(image.Pt(gtx.Constraints.Max.X, h))
+			return material.List(a.theme, &a.jobsList).Layout(gtx, len(jobs), func(gtx layout.Context, i int) layout.Dimensions {
+				return a.layoutJobRow(gtx, jobs[i], i)
+			})
+		}),
+	)
+}
+
+// layoutJobsHeader renders the panel's title line (label + job count) plus,
+// while a row is hovered, a second line with that job's full why — the
+// tooltip-equivalent affordance for the truncated why cells below.
+func (a *App) layoutJobsHeader(gtx layout.Context, jobs []jobRowData) layout.Dimensions {
+	headerH := gtx.Dp(jobsHeaderH)
+	if a.hoverJob >= 0 {
+		headerH += gtx.Dp(jobsDetailH)
+	}
+	totalW := gtx.Constraints.Max.X
+
+	paint.FillShape(gtx.Ops, headerBGClr, clip.Rect{Max: image.Pt(totalW, headerH)}.Op())
+
+	return layout.Inset{
+		Left: unit.Dp(16), Right: unit.Dp(16),
+		Top: unit.Dp(4),
+	}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+				return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+						l := material.Body2(a.theme, "LIVE JOBS")
+						l.Color = textMuted
+						l.TextSize = unit.Sp(10)
+						l.Font.Weight = font.Medium
+						return l.Layout(gtx)
+					}),
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+						return layout.Inset{Left: unit.Dp(8)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+							l := material.Body2(a.theme, fmt.Sprintf("%d", len(jobs)))
+							l.Color = accentOrange
+							l.TextSize = unit.Sp(10)
+							l.Font.Weight = font.Bold
+							return l.Layout(gtx)
+						})
+					}),
+					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+						return layout.Inset{Left: unit.Dp(12)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+							l := material.Body2(a.theme, "hover a row for the full why")
+							l.Color = textMuted
+							l.TextSize = unit.Sp(9)
+							return l.Layout(gtx)
+						})
+					}),
+				)
+			}),
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+				if a.hoverJob < 0 || a.hoverJob >= len(jobs) {
+					return layout.Dimensions{}
+				}
+				return layout.Inset{Top: unit.Dp(1)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+					l := material.Body2(a.theme, jobDetailLine(jobs[a.hoverJob]))
+					l.Color = accentOrange
+					l.TextSize = unit.Sp(10)
+					l.Font.Weight = font.Medium
+					l.MaxLines = 1
+					return l.Layout(gtx)
+				})
+			}),
+		)
+	})
+}
+
+// layoutJobRow renders one live-job row: state, type, model, who badge, and
+// the why — the widest cell, prominent, truncated to a single line. Hovering
+// records the row index so the header can reveal the full why.
+func (a *App) layoutJobRow(gtx layout.Context, j jobRowData, idx int) layout.Dimensions {
+	rowH := gtx.Dp(jobRowH)
+	totalW := gtx.Constraints.Max.X
+
+	if idx%2 == 0 {
+		paint.FillShape(gtx.Ops, rowAltColor, clip.Rect{Max: image.Pt(totalW, rowH)}.Op())
+	}
+
+	// Hover tracking for the header detail line.
+	ensureTags(&a.jobTags, idx+1)
+	tag := &a.jobTags[idx]
+	area := clip.Rect{Max: image.Pt(totalW, rowH)}.Push(gtx.Ops)
+	event.Op(gtx.Ops, tag)
+	area.Pop()
+	for {
+		ev, ok := gtx.Event(pointer.Filter{Target: tag, Kinds: pointer.Enter | pointer.Leave})
+		if !ok {
+			break
+		}
+		if e, ok := ev.(pointer.Event); ok {
+			switch e.Kind {
+			case pointer.Enter:
+				a.hoverJob = idx
+			case pointer.Leave:
+				if a.hoverJob == idx {
+					a.hoverJob = -1
+				}
+			}
+		}
+	}
+
+	type cell struct {
+		text  string
+		width unit.Dp
+		clr   color.NRGBA
+		bold  bool
+	}
+	cells := []cell{
+		{j.State, unit.Dp(64), j.StateClr, true},
+		{j.Type, unit.Dp(110), textSecondary, false},
+		{j.Model, unit.Dp(120), textMuted, false},
+	}
+
+	x := 0
+	for _, c := range cells {
+		off := op.Offset(image.Pt(x, 0)).Push(gtx.Ops)
+		gtxCol := gtx
+		gtxCol.Constraints = layout.Exact(image.Pt(gtx.Dp(c.width), rowH))
+		layout.Inset{Left: unit.Dp(8), Top: unit.Dp(5)}.Layout(gtxCol, func(gtx layout.Context) layout.Dimensions {
+			l := material.Body2(a.theme, c.text)
+			l.Color = c.clr
+			l.TextSize = unit.Sp(11)
+			if c.bold {
+				l.Font.Weight = font.Medium
+			}
+			l.MaxLines = 1
+			return l.Layout(gtx)
+		})
+		off.Pop()
+		x += gtx.Dp(c.width)
+	}
+
+	// Who badge — reuses the host-badge pill (muted variant). Missing who
+	// renders a placeholder dash.
+	off := op.Offset(image.Pt(x, 0)).Push(gtx.Ops)
+	gtxCol := gtx
+	gtxCol.Constraints = layout.Exact(image.Pt(gtx.Dp(unit.Dp(90)), rowH))
+	layout.Inset{Left: unit.Dp(4), Top: unit.Dp(3)}.Layout(gtxCol, func(gtx layout.Context) layout.Dimensions {
+		if j.Who == "" {
+			l := material.Body2(a.theme, "-")
+			l.Color = textMuted
+			l.TextSize = unit.Sp(11)
+			l.MaxLines = 1
+			return l.Layout(gtx)
+		}
+		return a.layoutHostBadge(gtx, j.Who, false)
+	})
+	off.Pop()
+	x += gtx.Dp(unit.Dp(90))
+
+	// Why: the star of the panel — widest cell, prominent colour, single line.
+	off = op.Offset(image.Pt(x, 0)).Push(gtx.Ops)
+	whyW := totalW - x
+	gtxCol = gtx
+	gtxCol.Constraints = layout.Exact(image.Pt(whyW, rowH))
+	layout.Inset{Left: unit.Dp(8), Right: unit.Dp(16), Top: unit.Dp(5)}.Layout(gtxCol, func(gtx layout.Context) layout.Dimensions {
+		if j.Why == "" {
+			l := material.Body2(a.theme, "-")
+			l.Color = textMuted
+			l.TextSize = unit.Sp(11)
+			l.MaxLines = 1
+			return l.Layout(gtx)
+		}
+		l := material.Body2(a.theme, j.Why)
+		l.Color = accentOrange
+		l.Font.Weight = font.Medium
+		l.TextSize = unit.Sp(11)
+		l.MaxLines = 1
+		return l.Layout(gtx)
+	})
+	off.Pop()
+
+	// Row separator
+	sepOff := op.Offset(image.Pt(gtx.Dp(unit.Dp(16)), rowH-1)).Push(gtx.Ops)
+	sepW := totalW - gtx.Dp(unit.Dp(32))
+	paint.FillShape(gtx.Ops, color.NRGBA{R: 0x22, G: 0x22, B: 0x22, A: 0xff},
+		clip.Rect{Max: image.Pt(sepW, 1)}.Op())
+	sepOff.Pop()
+
+	return layout.Dimensions{Size: image.Pt(totalW, rowH)}
 }
 
 // ensureTags grows a tag slice to at least n elements.

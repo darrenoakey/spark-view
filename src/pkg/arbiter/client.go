@@ -79,6 +79,23 @@ type RemoteHost struct {
 	BudgetGB     float64  `json:"budget_gb"`
 }
 
+// ActiveJob describes one non-terminal job in the /v1/ps active_jobs_detail
+// panel: every queued/scheduled/running/following job, oldest first, capped at
+// 200 by the server. Who/Why carry caller provenance — the service or agent
+// that submitted the work and the human-meaningful root reason for it (e.g. a
+// beezle music-video task shows the same why all the way down to the ltx
+// encode jobs). Both are optional; older callers may not set them.
+type ActiveJob struct {
+	JobID     string   `json:"job_id"`
+	Type      string   `json:"type"`
+	Model     string   `json:"model"`
+	State     string   `json:"state"`
+	CreatedAt float64  `json:"created_at"`
+	StartedAt *float64 `json:"started_at,omitempty"` // absent until the job starts
+	Who       string   `json:"who,omitempty"`
+	Why       string   `json:"why,omitempty"`
+}
+
 // Status is the response from GET /v1/ps.
 type Status struct {
 	VRAMBudgetGB      float64      `json:"vram_budget_gb"`
@@ -91,6 +108,10 @@ type Status struct {
 	Models            []Model      `json:"models"`
 	Queue             Queue        `json:"queue"`
 	RemoteHosts       []RemoteHost `json:"remote_hosts"`
+	// ActiveJobsDetail is the optional per-job provenance panel. It is nil on
+	// older servers that do not emit it, and on idle servers — the UI hides
+	// the live-jobs section in both cases.
+	ActiveJobsDetail []ActiveJob `json:"active_jobs_detail"`
 }
 
 // Client communicates with the Arbiter server.

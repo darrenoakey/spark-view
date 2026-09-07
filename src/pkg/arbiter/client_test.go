@@ -269,6 +269,98 @@ func TestPSInProgress(t *testing.T) {
 	if idle.InProgress != nil {
 		t.Errorf("idle model InProgress = %+v, want nil", idle.InProgress)
 	}
+
+	// Older-server wire shape: no active_jobs_detail panel at all must decode
+	// to nil so the UI can hide the live-jobs section entirely.
+	if status.ActiveJobsDetail != nil {
+		t.Errorf("ActiveJobsDetail = %+v, want nil when the panel is absent", status.ActiveJobsDetail)
+	}
+}
+
+// TestPSActiveJobsDetail verifies the client parses the optional per-job
+// caller-provenance panel: oldest-first ordering, optional started_at
+// present/absent, and optional who/why present/absent.
+func TestPSActiveJobsDetail(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+
+	// Raw JSON so we exercise the real wire shape arbiter produces: job 1 has
+	// every field; job 2 omits started_at, who and why entirely.
+	body := `{
+		"models": [],
+		"active_jobs_detail": [
+			{"job_id":"j-1","type":"ltx25-encode","model":"ltx25","state":"running",
+			 "created_at":1774045000.0,"started_at":1774045005.5,
+			 "who":"waggler","why":"hang williams video"},
+			{"job_id":"j-2","type":"tts","model":"kokoro","state":"queued",
+			 "created_at":1774045001.25}
+		]
+	}`
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /v1/ps", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(body))
+	})
+
+	server := &http.Server{Handler: mux}
+	go func() { _ = server.Serve(listener) }()
+	t.Cleanup(func() { _ = server.Close() })
+
+	client := NewClient("http://" + listener.Addr().String())
+	status, err := client.PS()
+	if err != nil {
+		t.Fatalf("PS() error: %v", err)
+	}
+	if len(status.ActiveJobsDetail) != 2 {
+		t.Fatalf("ActiveJobsDetail count = %d, want 2", len(status.ActiveJobsDetail))
+	}
+
+	// Server order is oldest-first and must be preserved for display.
+	j1 := status.ActiveJobsDetail[0]
+	if j1.JobID != "j-1" {
+		t.Errorf("JobID = %q, want j-1", j1.JobID)
+	}
+	if j1.Type != "ltx25-encode" {
+		t.Errorf("Type = %q, want ltx25-encode", j1.Type)
+	}
+	if j1.Model != "ltx25" {
+		t.Errorf("Model = %q, want ltx25", j1.Model)
+	}
+	if j1.State != "running" {
+		t.Errorf("State = %q, want running", j1.State)
+	}
+	if j1.CreatedAt != 1774045000.0 {
+		t.Errorf("CreatedAt = %v, want 1774045000.0", j1.CreatedAt)
+	}
+	if j1.StartedAt == nil || *j1.StartedAt != 1774045005.5 {
+		t.Errorf("StartedAt = %v, want 1774045005.5", j1.StartedAt)
+	}
+	if j1.Who != "waggler" {
+		t.Errorf("Who = %q, want waggler", j1.Who)
+	}
+	if j1.Why != "hang williams video" {
+		t.Errorf("Why = %q, want %q", j1.Why, "hang williams video")
+	}
+
+	j2 := status.ActiveJobsDetail[1]
+	if j2.JobID != "j-2" {
+		t.Errorf("JobID = %q, want j-2", j2.JobID)
+	}
+	if j2.State != "queued" {
+		t.Errorf("State = %q, want queued", j2.State)
+	}
+	if j2.StartedAt != nil {
+		t.Errorf("StartedAt = %v, want nil (absent on the wire)", *j2.StartedAt)
+	}
+	if j2.Who != "" {
+		t.Errorf("Who = %q, want empty (absent on the wire)", j2.Who)
+	}
+	if j2.Why != "" {
+		t.Errorf("Why = %q, want empty (absent on the wire)", j2.Why)
+	}
 }
 
 // TestPSError verifies the client handles server errors gracefully.
