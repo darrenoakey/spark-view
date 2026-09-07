@@ -250,17 +250,54 @@ func TestJobStateColor(t *testing.T) {
 func TestJobDetailLine(t *testing.T) {
 	tests := []struct {
 		name string
-		job  jobRowData
+		row  jobRowData
 		want string
 	}{
-		{"who and why", jobRowData{Who: "waggler", Why: "hang williams video"}, "waggler — hang williams video"},
+		{"who and why prefers why", jobRowData{Who: "waggler", Why: "hang williams video"}, "hang williams video"},
 		{"why only", jobRowData{Why: "hang williams video"}, "hang williams video"},
 		{"who only", jobRowData{Who: "beezle"}, "beezle"},
-		{"neither", jobRowData{}, "(no provenance recorded)"},
+		{"neither", jobRowData{}, ""},
 	}
 	for _, tt := range tests {
-		if got := jobDetailLine(tt.job); got != tt.want {
-			t.Errorf("%s: jobDetailLine = %q, want %q", tt.name, got, tt.want)
+		if got := provenanceLabel(tt.row); got != tt.want {
+			t.Errorf("%s: provenanceLabel = %q, want %q", tt.name, got, tt.want)
 		}
+	}
+}
+
+func TestProvenanceLabelTruncatesLongWhy(t *testing.T) {
+	long := strings.Repeat("x", 40)
+	got := provenanceLabel(jobRowData{Why: long})
+	if len([]rune(got)) != 26 {
+		t.Fatalf("provenanceLabel length = %d, want 26 (25 chars + ellipsis)", len([]rune(got)))
+	}
+	if !strings.HasSuffix(got, "\u2026") {
+		t.Fatalf("provenanceLabel = %q, want ellipsis suffix", got)
+	}
+}
+
+func TestModelProvenance(t *testing.T) {
+	if got := modelProvenance(nil); got != nil {
+		t.Errorf("modelProvenance(nil) = %v, want nil", got)
+	}
+
+	jobs := []arbiter.ActiveJob{
+		{JobID: "a", Model: "ltx25", State: "queued", Who: "waggler"},
+		{JobID: "b", Model: "ltx25", State: "running", Who: "waggler", Why: "hang williams video"},
+		{JobID: "c", Model: "moondream", State: "queued", Who: "photo-namer"},
+	}
+	prov := modelProvenance(jobs)
+	if len(prov) != 2 {
+		t.Fatalf("modelProvenance entries = %d, want 2", len(prov))
+	}
+	// ltx25 has two jobs; the one WITH why must win over the who-only one.
+	if got := prov["ltx25"]; got.Why != "hang williams video" || got.Who != "waggler" {
+		t.Errorf("ltx25 provenance = %+v, want why=hang williams video who=waggler", got)
+	}
+	if got := prov["moondream"]; got.Who != "photo-namer" || got.Why != "" {
+		t.Errorf("moondream provenance = %+v, want who=photo-namer why=empty", got)
+	}
+	if _, ok := prov["idle-model"]; ok {
+		t.Errorf("idle-model should have no provenance entry")
 	}
 }

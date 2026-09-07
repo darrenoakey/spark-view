@@ -67,6 +67,10 @@ var (
 	badgeRemoteText = accentCyan
 	badgeLocalBG    = color.NRGBA{R: 0x22, G: 0x22, B: 0x2c, A: 0xff}
 	badgeLocalText  = textSecondary
+
+	// Provenance badge (who/why) fill — amber-tinted like rowActiveBG so a
+	// model row visibly carrying a live job reads as "this is why it's busy".
+	badgeProvenanceBG = color.NRGBA{R: 0x4a, G: 0x2a, B: 0x00, A: 0xff}
 )
 
 // Column widths: Model (flexed), State, Max, Conc, VRAM, Active, Queued,
@@ -96,10 +100,6 @@ type App struct {
 	concTags  []bool // pointer tags for max-concurrent column right-click
 	queueTags []bool // pointer tags for queued column right-click
 
-	jobsList widget.List
-	jobTags  []bool // pointer hover tags for live-job rows
-	hoverJob int    // hovered live-job row index, -1 = none (reveals full why in header)
-
 	ctxMenu     menu.ContextMenu
 	ctxMenuType string // "max", "conc", or "clear"
 	ctxModelID  string // model ID for the open context menu
@@ -109,13 +109,11 @@ type App struct {
 func NewApp(win *app.Window, client *arbiter.Client) *App {
 	th := material.NewTheme()
 	a := &App{
-		theme:    th,
-		win:      win,
-		client:   client,
-		hoverJob: -1,
+		theme:  th,
+		win:    win,
+		client: client,
 	}
 	a.list.Axis = layout.Vertical
-	a.jobsList.Axis = layout.Vertical
 	return a
 }
 
@@ -185,15 +183,6 @@ func (a *App) Layout(gtx layout.Context) layout.Dimensions {
 				return a.layoutDisconnected(gtx, lastErr, lastGood)
 			}
 			return a.layoutTable(gtx, status)
-		}),
-		// Live-jobs panel (per-job caller provenance). Hidden entirely when the
-		// link is down — frozen job rows must never look live (see mutedIfStale)
-		// — or when the server does not report active_jobs_detail.
-		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			if !connected {
-				return layout.Dimensions{}
-			}
-			return a.layoutLiveJobs(gtx, status)
 		}),
 		// Bottom separator
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
@@ -357,19 +346,16 @@ func (a *App) layoutDisconnected(gtx layout.Context, lastErr error, lastGood tim
 }
 
 func (a *App) layoutTable(gtx layout.Context, status arbiter.Status) layout.Dimensions {
+	prov := modelProvenance(status.ActiveJobsDetail)
 	return material.List(a.theme, &a.list).Layout(gtx, len(status.Models), func(gtx layout.Context, index int) layout.Dimensions {
-		return a.layoutRow(gtx, status.Models[index], index)
+		m := status.Models[index]
+		return a.layoutRow(gtx, m, index, prov[m.ID])
 	})
 }
 
-// Live-jobs panel geometry: compact rows, capped list height so the panel can
-// never crowd out the model table — the list scrolls internally beyond the cap.
-const (
-	jobRowH      = unit.Dp(24)
-	jobsHeaderH  = unit.Dp(22)
-	jobsDetailH  = unit.Dp(18)
-	jobsMaxListH = unit.Dp(126)
-)
+// Live-job data prep geometry/constants retired with the standalone panel
+// (see modelProvenance below) — provenance now renders inline on each model
+// row instead of a separate section, so it never costs extra vertical space.
 
 // jobRowData is the prepared display data for one live-job row — the seam
 // between /v1/ps parsing and Gio rendering, so the panel's data prep is
@@ -405,7 +391,49 @@ func prepareJobRows(jobs []arbiter.ActiveJob) []jobRowData {
 	return rows
 }
 
-// jobStateColor maps a live-job state to its accent colour.
+// modelProvenance picks one representative live job per model from the
+// /v1/ps active_jobs_detail panel, so each model row can show WHO is using it
+// and WHY — inline, in the existing table, at no extra vertical cost. When
+// several jobs share a model, a row with a non-empty why (the human-meaningful
+// root reason, e.g. "hang williams video") wins over one with only who; ties
+// keep the first (oldest, per server ordering). Returns nil for no jobs; a
+// missing map entry and a present-but-empty jobRowData both correctly render
+// no badge (see provenanceLabel).
+func modelProvenance(jobs []arbiter.ActiveJob) map[string]jobRowData {
+	if len(jobs) == 0 {
+		return nil
+	}
+	out := make(map[string]jobRowData, len(jobs))
+	for _, j := range jobs {
+		row := jobRowData{State: j.State, Type: j.Type, Model: j.Model, Who: j.Who, Why: j.Why}
+		if existing, ok := out[j.Model]; !ok || (existing.Why == "" && row.Why != "") {
+			out[j.Model] = row
+		}
+	}
+	return out
+}
+
+// provenanceLabel is the compact badge text for a model row: why (the star —
+// the human-meaningful root reason) when present, else who, else empty (no
+// badge at all — idle/anonymous jobs render exactly as before). Truncated so
+// it always fits the fixed-width badge instead of crowding out the model name.
+func provenanceLabel(row jobRowData) string {
+	label := row.Why
+	if label == "" {
+		label = row.Who
+	}
+	const maxRunes = 26
+	r := []rune(label)
+	if len(r) > maxRunes {
+		return string(r[:maxRunes-1]) + "…"
+	}
+	return label
+}
+
+// jobStateColor maps a live-job state to its accent colour. Kept alongside
+// prepareJobRows/jobRowData as the general live-job data-prep helpers even
+// though the standalone panel that first used it was replaced by the inline
+// model-row badge (modelProvenance/provenanceLabel).
 func jobStateColor(state string) color.NRGBA {
 	switch state {
 	case "running":
@@ -419,233 +447,6 @@ func jobStateColor(state string) color.NRGBA {
 	default:
 		return textMuted
 	}
-}
-
-// jobDetailLine is the full-text line revealed in the panel header while a row
-// is hovered — the closest thing to a tooltip this toolkit style has. It spells
-// out who and why in full when the row's single-line truncation bites.
-func jobDetailLine(j jobRowData) string {
-	switch {
-	case j.Who != "" && j.Why != "":
-		return j.Who + " — " + j.Why
-	case j.Why != "":
-		return j.Why
-	case j.Who != "":
-		return j.Who
-	default:
-		return "(no provenance recorded)"
-	}
-}
-
-// layoutLiveJobs renders the per-job caller-provenance panel backed by the
-// /v1/ps active_jobs_detail panel: one compact row per non-terminal job showing
-// state, type, model, who (the submitting service/agent) and why (the root
-// human reason for the GPU work — the star of the panel), oldest first exactly
-// as the server orders them. An older server without the panel (or an idle
-// one) hides the section entirely.
-func (a *App) layoutLiveJobs(gtx layout.Context, status arbiter.Status) layout.Dimensions {
-	jobs := prepareJobRows(status.ActiveJobsDetail)
-	if len(jobs) == 0 {
-		return layout.Dimensions{}
-	}
-	if a.hoverJob >= len(jobs) {
-		a.hoverJob = -1
-	}
-
-	return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
-		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			return a.layoutJobsHeader(gtx, jobs)
-		}),
-		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			rowH := gtx.Dp(jobRowH)
-			maxH := gtx.Dp(jobsMaxListH)
-			h := rowH * len(jobs)
-			if h > maxH {
-				h = maxH
-			}
-			gtx.Constraints = layout.Exact(image.Pt(gtx.Constraints.Max.X, h))
-			return material.List(a.theme, &a.jobsList).Layout(gtx, len(jobs), func(gtx layout.Context, i int) layout.Dimensions {
-				return a.layoutJobRow(gtx, jobs[i], i)
-			})
-		}),
-	)
-}
-
-// layoutJobsHeader renders the panel's title line (label + job count) plus,
-// while a row is hovered, a second line with that job's full why — the
-// tooltip-equivalent affordance for the truncated why cells below.
-func (a *App) layoutJobsHeader(gtx layout.Context, jobs []jobRowData) layout.Dimensions {
-	headerH := gtx.Dp(jobsHeaderH)
-	if a.hoverJob >= 0 {
-		headerH += gtx.Dp(jobsDetailH)
-	}
-	totalW := gtx.Constraints.Max.X
-
-	paint.FillShape(gtx.Ops, headerBGClr, clip.Rect{Max: image.Pt(totalW, headerH)}.Op())
-
-	return layout.Inset{
-		Left: unit.Dp(16), Right: unit.Dp(16),
-		Top: unit.Dp(4),
-	}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-		return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
-			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
-					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-						l := material.Body2(a.theme, "LIVE JOBS")
-						l.Color = textMuted
-						l.TextSize = unit.Sp(10)
-						l.Font.Weight = font.Medium
-						return l.Layout(gtx)
-					}),
-					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-						return layout.Inset{Left: unit.Dp(8)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-							l := material.Body2(a.theme, fmt.Sprintf("%d", len(jobs)))
-							l.Color = accentOrange
-							l.TextSize = unit.Sp(10)
-							l.Font.Weight = font.Bold
-							return l.Layout(gtx)
-						})
-					}),
-					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-						return layout.Inset{Left: unit.Dp(12)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-							l := material.Body2(a.theme, "hover a row for the full why")
-							l.Color = textMuted
-							l.TextSize = unit.Sp(9)
-							return l.Layout(gtx)
-						})
-					}),
-				)
-			}),
-			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				if a.hoverJob < 0 || a.hoverJob >= len(jobs) {
-					return layout.Dimensions{}
-				}
-				return layout.Inset{Top: unit.Dp(1)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-					l := material.Body2(a.theme, jobDetailLine(jobs[a.hoverJob]))
-					l.Color = accentOrange
-					l.TextSize = unit.Sp(10)
-					l.Font.Weight = font.Medium
-					l.MaxLines = 1
-					return l.Layout(gtx)
-				})
-			}),
-		)
-	})
-}
-
-// layoutJobRow renders one live-job row: state, type, model, who badge, and
-// the why — the widest cell, prominent, truncated to a single line. Hovering
-// records the row index so the header can reveal the full why.
-func (a *App) layoutJobRow(gtx layout.Context, j jobRowData, idx int) layout.Dimensions {
-	rowH := gtx.Dp(jobRowH)
-	totalW := gtx.Constraints.Max.X
-
-	if idx%2 == 0 {
-		paint.FillShape(gtx.Ops, rowAltColor, clip.Rect{Max: image.Pt(totalW, rowH)}.Op())
-	}
-
-	// Hover tracking for the header detail line.
-	ensureTags(&a.jobTags, idx+1)
-	tag := &a.jobTags[idx]
-	area := clip.Rect{Max: image.Pt(totalW, rowH)}.Push(gtx.Ops)
-	event.Op(gtx.Ops, tag)
-	area.Pop()
-	for {
-		ev, ok := gtx.Event(pointer.Filter{Target: tag, Kinds: pointer.Enter | pointer.Leave})
-		if !ok {
-			break
-		}
-		if e, ok := ev.(pointer.Event); ok {
-			switch e.Kind {
-			case pointer.Enter:
-				a.hoverJob = idx
-			case pointer.Leave:
-				if a.hoverJob == idx {
-					a.hoverJob = -1
-				}
-			}
-		}
-	}
-
-	type cell struct {
-		text  string
-		width unit.Dp
-		clr   color.NRGBA
-		bold  bool
-	}
-	cells := []cell{
-		{j.State, unit.Dp(64), j.StateClr, true},
-		{j.Type, unit.Dp(110), textSecondary, false},
-		{j.Model, unit.Dp(120), textMuted, false},
-	}
-
-	x := 0
-	for _, c := range cells {
-		off := op.Offset(image.Pt(x, 0)).Push(gtx.Ops)
-		gtxCol := gtx
-		gtxCol.Constraints = layout.Exact(image.Pt(gtx.Dp(c.width), rowH))
-		layout.Inset{Left: unit.Dp(8), Top: unit.Dp(5)}.Layout(gtxCol, func(gtx layout.Context) layout.Dimensions {
-			l := material.Body2(a.theme, c.text)
-			l.Color = c.clr
-			l.TextSize = unit.Sp(11)
-			if c.bold {
-				l.Font.Weight = font.Medium
-			}
-			l.MaxLines = 1
-			return l.Layout(gtx)
-		})
-		off.Pop()
-		x += gtx.Dp(c.width)
-	}
-
-	// Who badge — reuses the host-badge pill (muted variant). Missing who
-	// renders a placeholder dash.
-	off := op.Offset(image.Pt(x, 0)).Push(gtx.Ops)
-	gtxCol := gtx
-	gtxCol.Constraints = layout.Exact(image.Pt(gtx.Dp(unit.Dp(90)), rowH))
-	layout.Inset{Left: unit.Dp(4), Top: unit.Dp(3)}.Layout(gtxCol, func(gtx layout.Context) layout.Dimensions {
-		if j.Who == "" {
-			l := material.Body2(a.theme, "-")
-			l.Color = textMuted
-			l.TextSize = unit.Sp(11)
-			l.MaxLines = 1
-			return l.Layout(gtx)
-		}
-		return a.layoutHostBadge(gtx, j.Who, false)
-	})
-	off.Pop()
-	x += gtx.Dp(unit.Dp(90))
-
-	// Why: the star of the panel — widest cell, prominent colour, single line.
-	off = op.Offset(image.Pt(x, 0)).Push(gtx.Ops)
-	whyW := totalW - x
-	gtxCol = gtx
-	gtxCol.Constraints = layout.Exact(image.Pt(whyW, rowH))
-	layout.Inset{Left: unit.Dp(8), Right: unit.Dp(16), Top: unit.Dp(5)}.Layout(gtxCol, func(gtx layout.Context) layout.Dimensions {
-		if j.Why == "" {
-			l := material.Body2(a.theme, "-")
-			l.Color = textMuted
-			l.TextSize = unit.Sp(11)
-			l.MaxLines = 1
-			return l.Layout(gtx)
-		}
-		l := material.Body2(a.theme, j.Why)
-		l.Color = accentOrange
-		l.Font.Weight = font.Medium
-		l.TextSize = unit.Sp(11)
-		l.MaxLines = 1
-		return l.Layout(gtx)
-	})
-	off.Pop()
-
-	// Row separator
-	sepOff := op.Offset(image.Pt(gtx.Dp(unit.Dp(16)), rowH-1)).Push(gtx.Ops)
-	sepW := totalW - gtx.Dp(unit.Dp(32))
-	paint.FillShape(gtx.Ops, color.NRGBA{R: 0x22, G: 0x22, B: 0x22, A: 0xff},
-		clip.Rect{Max: image.Pt(sepW, 1)}.Op())
-	sepOff.Pop()
-
-	return layout.Dimensions{Size: image.Pt(totalW, rowH)}
 }
 
 // ensureTags grows a tag slice to at least n elements.
@@ -665,7 +466,7 @@ const (
 	colETA      = 8 // Estimated time remaining — active models only
 )
 
-func (a *App) layoutRow(gtx layout.Context, m arbiter.Model, index int) layout.Dimensions {
+func (a *App) layoutRow(gtx layout.Context, m arbiter.Model, index int, prov jobRowData) layout.Dimensions {
 	rowH := gtx.Dp(unit.Dp(36))
 	totalW := gtx.Constraints.Max.X
 
@@ -768,7 +569,7 @@ func (a *App) layoutRow(gtx layout.Context, m arbiter.Model, index int) layout.D
 		case 0:
 			// Model-name cell: truncated name (flexed) + host badge(s) (rigid),
 			// so off-spark execution is visible without overflowing the column.
-			a.layoutNameCell(gtxCol, col.val, col.color, hosts)
+			a.layoutNameCell(gtxCol, col.val, col.color, hosts, prov)
 		case colProgress:
 			// Progress cell: a bar (done/total since load) + "done/total" text,
 			// but only for models actively working. Blank otherwise.
@@ -840,7 +641,7 @@ func runningHosts(m arbiter.Model) []hostBadge {
 
 // layoutNameCell renders the model name (truncated to one line, flexed) followed
 // by any running-host badges (rigid, right-aligned within the cell).
-func (a *App) layoutNameCell(gtx layout.Context, name string, nameColor color.NRGBA, hosts []hostBadge) layout.Dimensions {
+func (a *App) layoutNameCell(gtx layout.Context, name string, nameColor color.NRGBA, hosts []hostBadge, prov jobRowData) layout.Dimensions {
 	return layout.Inset{
 		Left: unit.Dp(16), Right: unit.Dp(16),
 		Top: unit.Dp(7),
@@ -857,9 +658,18 @@ func (a *App) layoutNameCell(gtx layout.Context, name string, nameColor color.NR
 				})
 			}),
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				return layout.Flex{Axis: layout.Horizontal, Alignment: layout.Middle}.Layout(gtx,
-					rigidBadges(a, hosts)...,
-				)
+				children := rigidBadges(a, hosts)
+				// Caller-provenance badge — who/why for this model's live job(s),
+				// inline in the existing row so it costs no extra vertical space
+				// (see modelProvenance). Absent for idle models / anonymous jobs.
+				if label := provenanceLabel(prov); label != "" {
+					children = append(children, layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+						return layout.Inset{Left: unit.Dp(6)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+							return a.layoutProvenanceBadge(gtx, label)
+						})
+					}))
+				}
+				return layout.Flex{Axis: layout.Horizontal, Alignment: layout.Middle}.Layout(gtx, children...)
 			}),
 		)
 	})
@@ -909,6 +719,36 @@ func (a *App) layoutHostBadge(gtx layout.Context, host string, remote bool) layo
 		NE:   radius, NW: radius, SE: radius, SW: radius,
 	}
 	paint.FillShape(gtx.Ops, bg, pill.Op(gtx.Ops))
+	call.Add(gtx.Ops)
+
+	return labelDims
+}
+
+// layoutProvenanceBadge draws a small amber-tinted rounded pill showing the
+// caller provenance (why the model is busy — or who submitted the work when
+// no why was recorded). Same visual language as layoutHostBadge, tinted to
+// match the active-row/active-count accent so it reads as "this is live".
+func (a *App) layoutProvenanceBadge(gtx layout.Context, label string) layout.Dimensions {
+	macro := op.Record(gtx.Ops)
+	labelDims := layout.Inset{
+		Left: unit.Dp(6), Right: unit.Dp(6),
+		Top: unit.Dp(2), Bottom: unit.Dp(2),
+	}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		l := material.Body2(a.theme, label)
+		l.Color = accentOrange
+		l.TextSize = unit.Sp(10)
+		l.Font.Weight = font.Medium
+		l.MaxLines = 1
+		return l.Layout(gtx)
+	})
+	call := macro.Stop()
+
+	radius := labelDims.Size.Y / 2
+	pill := clip.RRect{
+		Rect: image.Rectangle{Max: labelDims.Size},
+		NE:   radius, NW: radius, SE: radius, SW: radius,
+	}
+	paint.FillShape(gtx.Ops, badgeProvenanceBG, pill.Op(gtx.Ops))
 	call.Add(gtx.Ops)
 
 	return labelDims
