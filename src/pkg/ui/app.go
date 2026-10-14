@@ -7,6 +7,8 @@ import (
 	"image/color"
 	"log"
 	"math"
+	"reflect"
+	"strconv"
 	"sync"
 	"time"
 
@@ -85,15 +87,15 @@ type App struct {
 	win    *app.Window
 	client *arbiter.Client
 
-	mu          sync.Mutex
-	status      arbiter.Status
-	lastRefresh time.Time // end of the most recent poll (success or failure)
+	mu sync.Mutex
+	// view is what is on screen. It is replaced only when a poll produces a
+	// DIFFERENT view, and only then is the window invalidated — so an idle
+	// server costs no repaints at all (see view and Refresh).
+	view      view
+	changedAt time.Time // when view last changed (status-bar clock)
 	// lastGood is the end of the most recent SUCCESSFUL poll, i.e. the true age
-	// of the telemetry on screen. lastRefresh cannot answer that because it
-	// advances on failed polls too.
-	lastGood  time.Time
-	lastErr   error
-	connected bool
+	// of the telemetry kept on screen while the server is down.
+	lastGood time.Time
 
 	list      widget.List
 	maxTags   []bool // pointer tags for max-instances column right-click
@@ -117,41 +119,49 @@ func NewApp(win *app.Window, client *arbiter.Client) *App {
 	return a
 }
 
-// Refresh fetches fresh data from the Arbiter server. Call from a goroutine
-// (never the GUI thread): it performs blocking network I/O.
+// Refresh fetches fresh data from the Arbiter server and repaints the window
+// ONLY if what is on screen would change. Call from a goroutine (never the GUI
+// thread): it performs blocking network I/O.
 func (a *App) Refresh() {
 	status, err := a.client.PS()
-
-	a.mu.Lock()
-	wasConnected := a.connected
-	firstPoll := a.lastRefresh.IsZero()
-	if err != nil {
-		a.lastErr = err
-		a.connected = false
-	} else {
-		a.status = status
-		a.lastGood = time.Now()
-		a.lastErr = nil
-		a.connected = true
-	}
-	a.lastRefresh = time.Now()
-	nowConnected := a.connected
-	a.mu.Unlock()
+	prev, next, changed := a.apply(status, err, time.Now())
 
 	// Log connection state transitions only — not every poll — so the log stays
 	// a readable record of when the link went up or down.
 	switch {
-	case firstPoll && nowConnected:
+	case !prev.polled && next.connected:
 		log.Printf("poll: connected to arbiter (%d models)", len(status.Models))
-	case firstPoll && !nowConnected:
+	case !prev.polled && !next.connected:
 		log.Printf("poll: arbiter unreachable at startup: %v", err)
-	case wasConnected && !nowConnected:
+	case prev.connected && !next.connected:
 		log.Printf("poll: lost connection to arbiter: %v", err)
-	case !wasConnected && nowConnected:
+	case !prev.connected && next.connected:
 		log.Printf("poll: reconnected to arbiter (%d models)", len(status.Models))
 	}
 
-	a.win.Invalidate()
+	if changed {
+		a.win.Invalidate()
+	}
+}
+
+// apply folds one finished poll into the dashboard state. It returns the view
+// before and after, and whether the on-screen view changed — the ONLY case in
+// which the window needs repainting. Unchanged polls leave view and changedAt
+// untouched.
+func (a *App) apply(status arbiter.Status, err error, now time.Time) (prev, next view, changed bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if err == nil {
+		a.lastGood = now
+	}
+	prev = a.view
+	next = nextView(prev, status, err, a.lastGood, now)
+	if reflect.DeepEqual(prev, next) {
+		return prev, prev, false
+	}
+	a.view = next
+	a.changedAt = now
+	return prev, next, true
 }
 
 // Layout renders the full UI frame.
@@ -159,11 +169,8 @@ func (a *App) Layout(gtx layout.Context) layout.Dimensions {
 	paint.FillShape(gtx.Ops, bgColor, clip.Rect{Max: gtx.Constraints.Max}.Op())
 
 	a.mu.Lock()
-	status := a.status
-	connected := a.connected
-	lastErr := a.lastErr
-	lastRefresh := a.lastRefresh
-	lastGood := a.lastGood
+	v := a.view
+	changedAt := a.changedAt
 	a.mu.Unlock()
 
 	dims := layout.Flex{Axis: layout.Vertical}.Layout(gtx,
@@ -176,13 +183,13 @@ func (a *App) Layout(gtx layout.Context) layout.Dimensions {
 		}),
 		// Table body
 		layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
-			if !connected && lastRefresh.IsZero() {
+			if !v.polled {
 				return a.layoutConnecting(gtx)
 			}
-			if !connected {
-				return a.layoutDisconnected(gtx, lastErr, lastGood)
+			if !v.connected {
+				return a.layoutDisconnected(gtx, v.errText, v.lastData)
 			}
-			return a.layoutTable(gtx, status)
+			return a.layoutTable(gtx, v.rows)
 		}),
 		// Bottom separator
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
@@ -190,7 +197,7 @@ func (a *App) Layout(gtx layout.Context) layout.Dimensions {
 		}),
 		// Status bar
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			return a.layoutStatusBar(gtx, status, connected, lastErr, lastRefresh)
+			return a.layoutStatusBar(gtx, v, changedAt)
 		}),
 	)
 
@@ -305,7 +312,7 @@ func (a *App) layoutConnecting(gtx layout.Context) layout.Dimensions {
 	})
 }
 
-func (a *App) layoutDisconnected(gtx layout.Context, lastErr error, lastGood time.Time) layout.Dimensions {
+func (a *App) layoutDisconnected(gtx layout.Context, errText, lastData string) layout.Dimensions {
 	// Red-tinted background fill
 	bannerBG := color.NRGBA{R: 0x3a, G: 0x0a, B: 0x0a, A: 0xff}
 	paint.FillShape(gtx.Ops, bannerBG, clip.Rect{Max: gtx.Constraints.Max}.Op())
@@ -322,8 +329,8 @@ func (a *App) layoutDisconnected(gtx layout.Context, lastErr error, lastGood tim
 			layout.Rigid(layout.Spacer{Height: unit.Dp(12)}.Layout),
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 				msg := "Connection to Arbiter lost"
-				if lastErr != nil {
-					msg = lastErr.Error()
+				if errText != "" {
+					msg = errText
 				}
 				l := material.Body1(a.theme, msg)
 				l.Color = textMuted
@@ -332,11 +339,10 @@ func (a *App) layoutDisconnected(gtx layout.Context, lastErr error, lastGood tim
 			}),
 			layout.Rigid(layout.Spacer{Height: unit.Dp(8)}.Layout),
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				age := lastDataText(lastGood, time.Now())
-				if age == "" {
+				if lastData == "" {
 					return layout.Dimensions{}
 				}
-				l := material.Body2(a.theme, age)
+				l := material.Body2(a.theme, lastData)
 				l.Color = textMuted
 				l.Alignment = text.Middle
 				return l.Layout(gtx)
@@ -345,11 +351,9 @@ func (a *App) layoutDisconnected(gtx layout.Context, lastErr error, lastGood tim
 	})
 }
 
-func (a *App) layoutTable(gtx layout.Context, status arbiter.Status) layout.Dimensions {
-	prov := modelProvenance(status.ActiveJobsDetail)
-	return material.List(a.theme, &a.list).Layout(gtx, len(status.Models), func(gtx layout.Context, index int) layout.Dimensions {
-		m := status.Models[index]
-		return a.layoutRow(gtx, m, index, prov[m.ID])
+func (a *App) layoutTable(gtx layout.Context, rows []rowView) layout.Dimensions {
+	return material.List(a.theme, &a.list).Layout(gtx, len(rows), func(gtx layout.Context, index int) layout.Dimensions {
+		return a.layoutRow(gtx, rows[index], index)
 	})
 }
 
@@ -466,7 +470,7 @@ const (
 	colETA      = 8 // Estimated time remaining — active models only
 )
 
-func (a *App) layoutRow(gtx layout.Context, m arbiter.Model, index int, prov jobRowData) layout.Dimensions {
+func (a *App) layoutRow(gtx layout.Context, m rowView, index int) layout.Dimensions {
 	rowH := gtx.Dp(unit.Dp(36))
 	totalW := gtx.Constraints.Max.X
 
@@ -474,7 +478,7 @@ func (a *App) layoutRow(gtx layout.Context, m arbiter.Model, index int, prov job
 	switch {
 	case m.ActiveJobs > 0:
 		paint.FillShape(gtx.Ops, rowActiveBG, clip.Rect{Max: image.Pt(totalW, rowH)}.Op())
-	case m.State == "loaded" || m.State == "active":
+	case m.Loaded:
 		paint.FillShape(gtx.Ops, rowLoadedBG, clip.Rect{Max: image.Pt(totalW, rowH)}.Op())
 	default:
 		if index%2 == 0 {
@@ -489,52 +493,37 @@ func (a *App) layoutRow(gtx layout.Context, m arbiter.Model, index int, prov job
 
 	// Determine row colors based on state
 	nameColor := textSecondary
-	if m.State == "loaded" || m.State == "active" {
-		nameColor = textPrimary
-	}
-
 	stateColor := textMuted
-	stateText := m.State
-	if m.State == "loaded" || m.State == "active" {
+	vramColor := textMuted
+	if m.Loaded {
+		nameColor = textPrimary
 		stateColor = accentGreen
+		vramColor = textSecondary
 	}
 
-	maxText := fmt.Sprintf("%d", m.MaxInstances)
+	maxText := strconv.Itoa(m.MaxInstances)
 	maxColor := textSecondary
 
-	concText := fmt.Sprintf("%d", m.MaxConcurrent)
+	concText := strconv.Itoa(m.MaxConcurrent)
 	concColor := textSecondary
 
 	activeColor := textMuted
-	activeText := fmt.Sprintf("%d", m.ActiveJobs)
+	activeText := strconv.Itoa(m.ActiveJobs)
 	if m.ActiveJobs > 0 {
 		activeColor = accentOrange
 	}
 
 	queuedColor := textMuted
-	queuedText := fmt.Sprintf("%d", m.QueuedJobs)
+	queuedText := strconv.Itoa(m.QueuedJobs)
 	if m.QueuedJobs > 0 {
 		queuedColor = accentPurple
 	}
 
 	// ETA: humanized time remaining, only for models with active in-flight work.
-	// Idle/queued-only models (InProgress == nil) render a blank cell.
-	etaText := ""
+	// Idle/queued-only models render a blank cell.
 	etaColor := textMuted
-	if m.InProgress != nil {
-		etaText = "~" + formatDuration(m.InProgress.ETASeconds)
+	if m.Progress != nil {
 		etaColor = accentCyan
-	}
-
-	vramText := "-"
-	vramColor := textMuted
-	if m.State == "loaded" || m.State == "active" {
-		if m.VRAMGB > 0 && m.VRAMGB != m.MemoryGB {
-			vramText = fmt.Sprintf("%.0f (%.0f)", m.VRAMGB, m.MemoryGB)
-		} else {
-			vramText = fmt.Sprintf("%.0f GB", m.MemoryGB)
-		}
-		vramColor = textSecondary
 	}
 
 	type colData struct {
@@ -547,17 +536,15 @@ func (a *App) layoutRow(gtx layout.Context, m arbiter.Model, index int, prov job
 
 	columns := []colData{
 		{m.ID, nameW, text.Start, nameColor, true},
-		{stateText, gtx.Dp(colWidths[1]), text.Start, stateColor, false},
+		{m.State, gtx.Dp(colWidths[1]), text.Start, stateColor, false},
 		{maxText, gtx.Dp(colWidths[colMax]), text.End, maxColor, false},
 		{concText, gtx.Dp(colWidths[colConc]), text.End, concColor, false},
-		{vramText, gtx.Dp(colWidths[4]), text.End, vramColor, false},
+		{m.VRAM, gtx.Dp(colWidths[4]), text.End, vramColor, false},
 		{activeText, gtx.Dp(colWidths[5]), text.End, activeColor, false},
 		{queuedText, gtx.Dp(colWidths[colQueued]), text.End, queuedColor, false},
 		{"", gtx.Dp(colWidths[colProgress]), text.Start, textMuted, false}, // Progress: custom-rendered below
-		{etaText, gtx.Dp(colWidths[colETA]), text.End, etaColor, false},
+		{m.ETA, gtx.Dp(colWidths[colETA]), text.End, etaColor, false},
 	}
-
-	hosts := runningHosts(m)
 
 	x := 0
 	for colIdx, col := range columns {
@@ -569,11 +556,11 @@ func (a *App) layoutRow(gtx layout.Context, m arbiter.Model, index int, prov job
 		case 0:
 			// Model-name cell: truncated name (flexed) + host badge(s) (rigid),
 			// so off-spark execution is visible without overflowing the column.
-			a.layoutNameCell(gtxCol, col.val, col.color, hosts, prov)
+			a.layoutNameCell(gtxCol, col.val, col.color, m.Hosts, m.Provenance)
 		case colProgress:
 			// Progress cell: a bar (done/total since load) + "done/total" text,
 			// but only for models actively working. Blank otherwise.
-			a.layoutProgressCell(gtxCol, m.InProgress)
+			a.layoutProgressCell(gtxCol, m.Progress)
 		default:
 			layout.Inset{
 				Left: unit.Dp(16), Right: unit.Dp(16),
@@ -641,7 +628,7 @@ func runningHosts(m arbiter.Model) []hostBadge {
 
 // layoutNameCell renders the model name (truncated to one line, flexed) followed
 // by any running-host badges (rigid, right-aligned within the cell).
-func (a *App) layoutNameCell(gtx layout.Context, name string, nameColor color.NRGBA, hosts []hostBadge, prov jobRowData) layout.Dimensions {
+func (a *App) layoutNameCell(gtx layout.Context, name string, nameColor color.NRGBA, hosts []hostBadge, provenance string) layout.Dimensions {
 	return layout.Inset{
 		Left: unit.Dp(16), Right: unit.Dp(16),
 		Top: unit.Dp(7),
@@ -662,7 +649,7 @@ func (a *App) layoutNameCell(gtx layout.Context, name string, nameColor color.NR
 				// Caller-provenance badge — who/why for this model's live job(s),
 				// inline in the existing row so it costs no extra vertical space
 				// (see modelProvenance). Absent for idle models / anonymous jobs.
-				if label := provenanceLabel(prov); label != "" {
+				if label := provenance; label != "" {
 					children = append(children, layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 						return layout.Inset{Left: unit.Dp(6)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 							return a.layoutProvenanceBadge(gtx, label)
@@ -755,7 +742,7 @@ func (a *App) layoutProvenanceBadge(gtx layout.Context, label string) layout.Dim
 }
 
 // layoutColumnClickArea registers right-click event areas on interactive columns.
-func (a *App) layoutColumnClickArea(gtx layout.Context, m arbiter.Model, rowIdx, colIdx, colW, rowH int) {
+func (a *App) layoutColumnClickArea(gtx layout.Context, m rowView, rowIdx, colIdx, colW, rowH int) {
 	var tag *bool
 	switch colIdx {
 	case colMax:
@@ -818,7 +805,8 @@ func (a *App) layoutColumnClickArea(gtx layout.Context, m arbiter.Model, rowIdx,
 	}
 }
 
-func (a *App) layoutStatusBar(gtx layout.Context, status arbiter.Status, connected bool, lastErr error, lastRefresh time.Time) layout.Dimensions {
+func (a *App) layoutStatusBar(gtx layout.Context, v view, changedAt time.Time) layout.Dimensions {
+	bar, connected := v.bar, v.connected
 	barH := gtx.Dp(unit.Dp(36))
 	totalW := gtx.Constraints.Max.X
 
@@ -857,14 +845,14 @@ func (a *App) layoutStatusBar(gtx layout.Context, status arbiter.Status, connect
 						return layout.Inset{Left: unit.Dp(8)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 							gtx.Constraints.Min.X = gtx.Dp(unit.Dp(100))
 							gtx.Constraints.Max.X = gtx.Dp(unit.Dp(100))
-							return a.layoutGaugeBar(gtx, status.VRAMActualGB, status.VRAMBudgetGB, connected)
+							return a.layoutGaugeBar(gtx, float64(bar.VRAMActualGB), float64(bar.VRAMBudgetGB), connected)
 						})
 					}),
 					// VRAM numbers: actual (allocated) / budget
 					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 						return layout.Inset{Left: unit.Dp(8)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-							l := material.Body2(a.theme, fmt.Sprintf("%.0f (%.0f) / %.0f GB",
-								status.VRAMActualGB, status.VRAMAllocatedGB, status.VRAMBudgetGB))
+							l := material.Body2(a.theme, fmt.Sprintf("%d (%d) / %d GB",
+								bar.VRAMActualGB, bar.VRAMAllocatedGB, bar.VRAMBudgetGB))
 							l.Color = mutedIfStale(textSecondary, connected)
 							l.TextSize = unit.Sp(10)
 							return l.Layout(gtx)
@@ -884,13 +872,13 @@ func (a *App) layoutStatusBar(gtx layout.Context, status arbiter.Status, connect
 						return layout.Inset{Left: unit.Dp(8)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 							gtx.Constraints.Min.X = gtx.Dp(unit.Dp(60))
 							gtx.Constraints.Max.X = gtx.Dp(unit.Dp(60))
-							return a.layoutGaugeBar(gtx, float64(status.GPUUtilizationPct), 100, connected)
+							return a.layoutGaugeBar(gtx, float64(bar.GPUPct), 100, connected)
 						})
 					}),
 					// GPU utilization percentage
 					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 						return layout.Inset{Left: unit.Dp(8)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-							l := material.Body2(a.theme, fmt.Sprintf("%d%%", status.GPUUtilizationPct))
+							l := material.Body2(a.theme, fmt.Sprintf("%d%%", bar.GPUPct))
 							l.Color = mutedIfStale(textSecondary, connected)
 							l.TextSize = unit.Sp(10)
 							return l.Layout(gtx)
@@ -900,49 +888,45 @@ func (a *App) layoutStatusBar(gtx layout.Context, status arbiter.Status, connect
 			}),
 			// Middle: remote-hosts fleet indicator (nothing if no remote hosts)
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				return a.layoutRemoteHosts(gtx, status.RemoteHosts, connected)
+				return a.layoutRemoteHosts(gtx, bar.Remote, connected)
 			}),
 			// Right side: queue stats
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 				return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
 					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-						return a.layoutStatusStat(gtx, "run", status.Queue.Running, accentGreen, connected)
+						return a.layoutStatusStat(gtx, "run", bar.Running, accentGreen, connected)
 					}),
 					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 						return layout.Inset{Left: unit.Dp(16)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-							return a.layoutStatusStat(gtx, "queue", status.Queue.Queued, accentPurple, connected)
+							return a.layoutStatusStat(gtx, "queue", bar.Queued, accentPurple, connected)
 						})
 					}),
 					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 						return layout.Inset{Left: unit.Dp(16)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-							return a.layoutStatusStat(gtx, "done", status.Queue.Completed, accentCyan, connected)
+							return a.layoutStatusStat(gtx, "done", bar.Completed, accentCyan, connected)
 						})
 					}),
 					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 						return layout.Inset{Left: unit.Dp(16)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-							return a.layoutStatusStat(gtx, "fail", status.Queue.Failed, accentRed, connected)
+							return a.layoutStatusStat(gtx, "fail", bar.Failed, accentRed, connected)
 						})
 					}),
-					// Update time
+					// Last-change clock "changed 15:04:05" (a fixed time, never a
+					// ticking "Ns ago" that would need a repaint every second), or
+					// "offline" in red while the server is unreachable.
 					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-						if lastRefresh.IsZero() {
+						if !v.polled {
 							return layout.Dimensions{}
 						}
 						return layout.Inset{Left: unit.Dp(20)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-							var statusText string
-							if connected {
-								ago := time.Since(lastRefresh).Truncate(time.Second)
-								statusText = fmt.Sprintf("%s ago", ago)
-							} else if lastErr != nil {
+							statusText := changedText(changedAt)
+							clr := textMuted
+							if !connected {
 								statusText = "offline"
-							} else {
-								statusText = "..."
+								clr = accentRed
 							}
 							l := material.Body2(a.theme, statusText)
-							l.Color = textMuted
-							if !connected && lastErr != nil {
-								l.Color = accentRed
-							}
+							l.Color = clr
 							l.TextSize = unit.Sp(10)
 							return l.Layout(gtx)
 						})
@@ -980,7 +964,7 @@ func (a *App) layoutStatusStat(gtx layout.Context, label string, count int, clr 
 // layoutRemoteHosts renders a compact at-a-glance fleet view: one small dot per
 // remote host (green if reachable, red if not) followed by its host_id label.
 // Renders nothing when there are no remote hosts.
-func (a *App) layoutRemoteHosts(gtx layout.Context, hosts []arbiter.RemoteHost, live bool) layout.Dimensions {
+func (a *App) layoutRemoteHosts(gtx layout.Context, hosts []remoteView, live bool) layout.Dimensions {
 	if len(hosts) == 0 {
 		return layout.Dimensions{}
 	}
@@ -1074,12 +1058,12 @@ func progressFraction(done, total int) float64 {
 // progress as a filled bar plus a "done/total" label. It renders nothing (an
 // empty cell) when the model has no in-flight work (ip == nil), so idle and
 // queued-only models show a blank Progress column.
-func (a *App) layoutProgressCell(gtx layout.Context, ip *arbiter.InProgress) layout.Dimensions {
-	if ip == nil {
+func (a *App) layoutProgressCell(gtx layout.Context, p *progressView) layout.Dimensions {
+	if p == nil {
 		return layout.Dimensions{Size: gtx.Constraints.Min}
 	}
-	frac := progressFraction(ip.DoneSinceLoad, ip.TotalSinceLoad)
-	label := fmt.Sprintf("%d/%d", ip.DoneSinceLoad, ip.TotalSinceLoad)
+	frac := progressFraction(p.Done, p.Total)
+	label := fmt.Sprintf("%d/%d", p.Done, p.Total)
 
 	return layout.Inset{
 		Left: unit.Dp(16), Right: unit.Dp(16),

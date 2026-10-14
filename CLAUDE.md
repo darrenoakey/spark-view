@@ -5,7 +5,16 @@ GPU inference dashboard for the Arbiter server on spark (10.0.0.254:8400).
 ## Architecture
 
 - **Go + Gio** (immediate-mode desktop GUI)
-- Polls `GET /v1/ps` with 3s sleep between requests for VRAM, model, and queue status
+- Polls `GET /v1/ps` with 5s sleep between requests for VRAM, model, and queue status
+- **Idle CPU budget is ~0%. Repaint ONLY when the displayed data changes.** Each
+  poll builds a display-precision `view` (`pkg/ui/view.go`: formatted strings,
+  whole-GB VRAM, no undisplayed fields) off the GUI thread; `App.apply` compares
+  it with what is on screen and `Invalidate`s only on a difference. Gio redraws
+  are a full GPU frame, so never add anything that invalidates on a timer: no
+  ticking "Ns ago" label (the status bar shows a fixed `changed HH:MM:SS`), no
+  animation, no unconditional `Invalidate` in the poller. daz-golang-gio must be
+  >= v0.0.6: v0.0.5's persist tracker invalidated 10x/s forever (that, plus a
+  repaint every poll, was the old 7% idle CPU; now ~0.5%).
 - The optional `active_jobs_detail` /v1/ps panel feeds inline caller-provenance
   badges on the model table itself — no separate section, so it costs zero
   extra vertical space. `modelProvenance()` picks one representative live job
@@ -21,14 +30,24 @@ GPU inference dashboard for the Arbiter server on spark (10.0.0.254:8400).
 
 ## Build & Deploy
 
-- `./run rebuild` — build the signed bundle, (re)install the LaunchAgent, restart (the ONLY way to deploy changes)
+- Deploys go through **greenline** (`greenline submit`), which runs `./run check`
+  in the gate and `./run deploy` (build HEAD + reinstall the LaunchAgent + wait
+  for `./run health`) from the canonical checkout. `./run health` (<5s) proves the
+  agent's process is the bundle binary and started after the current build.
+- `./run rebuild` — build the signed bundle, (re)install the LaunchAgent, restart (manual/dev)
 - `./run install` — write/load `~/Library/LaunchAgents/com.darrenoakey.sparkview.plist`
 - `./run logs` — tail the live log
 - **Builds produce a code-signed `output/SparkView.app`** (stable identity:
   bundle id `com.darrenoakey.sparkview` + Apple Development Team — see Local
   Network privacy below). The loose `output/bin/sparkview` still exists for
-  tests/dev. Signing identity is auto-detected (`signing_identity` in `run`);
-  ad-hoc fallback only warns (ad-hoc breaks the persistent Local Network grant).
+  tests/dev. Signing identity is auto-detected (`signing_identity` in `run`) by
+  cert KIND (Apple Development / Developer ID), never by common name, skipping
+  revoked certs; ad-hoc fallback only warns (ad-hoc breaks the Local Network grant).
+- **The designated requirement is pinned to the Team ID** (`leaf[subject.OU] =
+  58MF5GATL7`, derived from the cert by `signing_team`), not codesign's default
+  leaf common name. The old CN-based DR ("Apple Development: Darren Oakey
+  (JY86Z5U7AD)") broke the Local Network grant when that cert was replaced in
+  Oct 2026 by "Created via API (8T4RKNCA74)"; the team-based DR survives renewals.
 
 ## Logging
 

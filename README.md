@@ -31,7 +31,7 @@ That's it! The dashboard will open and start showing live data right away.
 
 ## What You'll See
 
-The dashboard refreshes automatically every few seconds, so you're always looking at current information. Here's what each part of the display means:
+The dashboard checks the server every few seconds and redraws only when something actually changes, so it sits at roughly zero CPU while still showing current information. Here's what each part of the display means:
 
 **Model list** — Every AI model that Arbiter knows about appears as a row. You can see:
 - The model's name

@@ -23,21 +23,27 @@ usage() {
     echo "  run [args]         Build and run the main binary"
     echo "  install            Install & load the Spark View LaunchAgent"
     echo "  rebuild            Build, (re)install, and restart the LaunchAgent"
+    echo "  deploy             rebuild + wait for a healthy fresh process (greenline)"
+    echo "  health             Probe: agent running the current build (greenline)"
     echo "  logs               Tail the live Spark View log"
     exit 1
 }
 
 # signing_identity finds a STABLE code-signing identity (Apple Development /
-# Developer ID for Darren Oakey). A stable identity is what makes the macOS Local
-# Network grant survive rebuilds: TCC keys on the Designated Requirement (Team ID
-# + bundle id), which is constant across builds and even cert renewals. Falls back
-# to ad-hoc ("-") with a warning — ad-hoc changes identity every build, so the
+# Developer ID). A stable identity is what makes the macOS Local Network grant
+# survive rebuilds: TCC keys on the Designated Requirement (Team ID + bundle id),
+# which is constant across builds and even cert renewals. Match on the cert KIND,
+# never the common name: renewals change it (the 2026-10 renewal is named
+# "Apple Development: Created via API (8T4RKNCA74)", same team 58MF5GATL7) and a
+# name-pinned match silently fell back to ad-hoc. Revoked certs are skipped.
+# Falls back to ad-hoc ("-") with a warning — ad-hoc changes identity every build, so the
 # grant would NOT persist.
 signing_identity() {
     local id
     id="$( (security find-identity -v -p codesigning 2>/dev/null \
-            | grep -E "Apple Development: Darren Oakey|Developer ID Application: " \
-            | head -1 | awk '{print $2}') || true )"
+            | grep -E '"(Apple Development|Developer ID Application): ' \
+            | grep -v 'CSSMERR_' \
+            | awk 'NR == 1 {print $2}') || true )"
     if [ -n "$id" ]; then
         echo "$id"
     else
@@ -61,6 +67,20 @@ cmd_build() {
 # it with a stable identity + fixed bundle id, so macOS attributes Local Network
 # access to the bundle (not the launcher) and the user's one-time grant persists
 # across rebuilds. See CLAUDE.md "Local Network privacy".
+# signing_team prints the Team ID (certificate subject OU) of the signing
+# identity with the given SHA-1 hash.
+signing_team() {
+    # No early-exit readers (awk exit / head) anywhere in these pipes: under
+    # `set -o pipefail` the writer then dies of SIGPIPE and the script exits 141.
+    security find-certificate -a -Z -p 2>/dev/null \
+        | awk -v h="$1" '$0 ~ ("SHA-1 hash: " h) && !done {f = 1}
+                          f && /BEGIN CERT/ {p = 1}
+                          p {print}
+                          p && /END CERT/ {p = 0; f = 0; done = 1}' \
+        | openssl x509 -noout -subject 2>/dev/null \
+        | tr '/,' '\n\n' | sed -n 's/^ *OU *= *//p' | awk 'NR == 1'
+}
+
 cmd_bundle() {
     local id; id="$(signing_identity)"
     echo "==> Bundling SparkView.app (sign id: $id)"
@@ -72,9 +92,22 @@ cmd_bundle() {
         echo "    WARNING: no stable signing identity found; ad-hoc signing — the"
         echo "             Local Network grant will NOT persist across rebuilds."
     fi
+    # Pin the designated requirement to the TEAM (leaf OU), not codesign's
+    # default leaf common name. TCC records this DR with the Local Network grant;
+    # the default CN-based DR ("Apple Development: Darren Oakey (JY86Z5U7AD)")
+    # stopped matching the moment that cert was replaced, so every renewal
+    # silently lost the grant. A team-based DR survives renewals.
+    local req=()
+    if [ "$id" != "-" ]; then
+        local team; team="$(signing_team "$id")"
+        if [ -n "$team" ]; then
+            req=("-r=designated => identifier \"$BUNDLE_ID\" and anchor apple generic and certificate leaf[subject.OU] = \"$team\"")
+        fi
+    fi
     codesign --force --options runtime --identifier "$BUNDLE_ID" \
-        --sign "$id" "$APP_BUNDLE" 2>&1 | sed 's/^/    /'
+        ${req[@]+"${req[@]}"} --sign "$id" "$APP_BUNDLE" 2>&1 | sed 's/^/    /'
     echo "    Bundled -> output/SparkView.app"
+    codesign -d -r- "$APP_BUNDLE" 2>&1 | grep designated | sed 's/^/    /' || true
     codesign -dv "$APP_BUNDLE" 2>&1 | grep -E "Identifier|TeamIdentifier|Authority=Apple Development|Authority=Developer ID" | sed 's/^/    /' || true
 }
 
@@ -180,6 +213,64 @@ cmd_rebuild() {
     cmd_install # bootout + bootstrap already restarts with the fresh binary
 }
 
+# live_pid prints the PID launchd reports for the Spark View agent (empty if none).
+live_pid() {
+    # Reads ALL input (no `exit`): an early-exit reader SIGPIPEs launchctl and
+    # pipefail turns that into a 141 abort.
+    launchctl print "gui/$(id -u)/$LA_LABEL" 2>/dev/null \
+        | awk '$1 == "pid" && $2 == "=" && pid == "" {pid = $3} END {print pid}'
+}
+
+# cmd_health is the greenline probe (<5s, no network): the agent is loaded and
+# running, its process IS the bundle binary, and that process started after the
+# binary was built "" i.e. prod is running the build we just deployed, not a
+# leftover from before.
+cmd_health() {
+    local pid exe started built
+    pid="$(live_pid)"
+    if [ -z "$pid" ]; then
+        echo "FAIL: $LA_LABEL is not running" >&2
+        return 1
+    fi
+    exe="$(ps -o comm= -p "$pid")"
+    if [ "$exe" != "$APP_EXE" ]; then
+        echo "FAIL: pid $pid runs '$exe', want '$APP_EXE'" >&2
+        return 1
+    fi
+    # LC_ALL=C: ps formats lstart per locale (en_AU puts the day first), and
+    # date -f must parse exactly what ps printed.
+    started="$(LC_ALL=C date -j -f '%a %b %d %T %Y' "$(LC_ALL=C ps -o lstart= -p "$pid" | sed 's/ *$//')" +%s)"
+    built="$(stat -f %m "$APP_EXE")"
+    if [ "$started" -lt "$built" ]; then
+        echo "FAIL: pid $pid started before the current build ($APP_EXE)" >&2
+        return 1
+    fi
+    echo "==> Healthy: Spark View pid $pid running the current build."
+}
+
+# cmd_deploy (greenline, cwd = canonical checkout): build the exact checked-out
+# HEAD, (re)load the LaunchAgent, and wait until the fresh process is healthy.
+# It then reports the new process's first poll result. That line is information,
+# not a verdict: "unreachable" right after a signing-identity change means the
+# one-time Local Network grant must be given (CLAUDE.md, Local Network privacy).
+cmd_deploy() {
+    cmd_build
+    cmd_install
+    local i pid poll=""
+    for ((i = 1; i <= 30; i++)); do
+        cmd_health >/dev/null 2>&1 && break
+        sleep 0.5
+    done
+    cmd_health
+    pid="$(live_pid)"
+    for ((i = 1; i <= 20; i++)); do
+        poll="$(awk -v s="starting (pid $pid)" 'index($0, s) {f=1} f && /poll: / {print; exit}' "$LA_LOG" 2>/dev/null)"
+        [ -n "$poll" ] && break
+        sleep 0.5
+    done
+    echo "    first poll: ${poll:-<none yet>}"
+}
+
 cmd_logs() {
     if [ ! -f "$LA_LOG" ]; then
         echo "No Spark View log yet at $LA_LOG" >&2
@@ -197,6 +288,8 @@ case "${1:-}" in
     run)     shift; cmd_run "$@" ;;
     install) shift; cmd_install "$@" ;;
     rebuild) shift; cmd_rebuild "$@" ;;
+    deploy)  shift; cmd_deploy "$@" ;;
+    health)  shift; cmd_health "$@" ;;
     logs)    shift; cmd_logs "$@" ;;
     *)       usage ;;
 esac

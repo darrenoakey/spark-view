@@ -16,13 +16,13 @@ check = "./run check"
 deploy = "./run deploy"
 
 # Optional health-only probe. Empty = re-run `deploy` as the health probe.
-health = ""
+health = "./run health"
 
 # Informational: the auto/service name this repo deploys.
-service = "spark view"
+service = "com.darrenoakey.sparkview"
 
 # Persistent worktree base for this repo (gate lives at <base>/gate).
-worktree_base = "/Volumes/Gumby/worktrees/greenline/spark view"
+worktree_base = "~/.greenline-worktrees/spark-view"
 
 # Legacy compatibility only. Greenline always deploys every successful release.
 # coalesce_deploys = false

@@ -25,7 +25,10 @@ var dockIconBytes []byte
 // pollInterval is the gap BETWEEN polls. The poller sleeps this long after each
 // fetch completes (see runPoller), so the interval is measured from the end of
 // the previous poll — a slow or timed-out fetch never overlaps the next one.
-const pollInterval = 3 * time.Second
+//
+// A poll is cheap (one ~20KB JSON fetch); what costs CPU is repainting, and a
+// poll only repaints when something on screen actually changed (ui.App.Refresh).
+const pollInterval = 5 * time.Second
 
 func main() {
 	// Timestamped lines to stderr; `auto` captures this into
